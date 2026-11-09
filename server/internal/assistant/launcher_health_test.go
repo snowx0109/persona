@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -416,9 +415,11 @@ func TestLauncherHealthRecheckSingleFlight(t *testing.T) {
 	// Both callers must be parked in recheckLauncherNow before the probe is allowed to finish, or the second one
 	// could arrive after the cleanup and take the throttle branch instead of joining the probe.
 	waitFor(t, "the second caller to join the probe", func() bool {
-		var buf [64 * 1024]byte
-		n := runtime.Stack(buf[:], true)
-		return strings.Count(string(buf[:n]), "recheckLauncherNow") >= 2
+		s.health.mu.Lock()
+		rc := s.health.recheck[healthKey("l4", "work")]
+		joined := rc != nil && rc.waiters >= 1
+		s.health.mu.Unlock()
+		return joined
 	})
 	close(release)
 	wg.Wait()

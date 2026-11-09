@@ -155,9 +155,10 @@ type healthBook struct {
 
 // healthRecheck is an on-demand launcher probe one start is running and concurrent starts wait for.
 type healthRecheck struct {
-	done chan struct{}
-	res  healthResult
-	got  bool
+	done    chan struct{}
+	res     healthResult
+	got     bool
+	waiters int // starts that joined this probe instead of starting their own
 }
 
 func healthKey(machine, launcher string) string { return machine + "/" + launcher }
@@ -829,6 +830,7 @@ func (s *Service) recheckLauncherNow(ctx context.Context, machine, launcher stri
 	b.mu.Lock()
 	s.healthLoadLocked(ctx)
 	if rc := b.recheck[key]; rc != nil {
+		rc.waiters++
 		b.mu.Unlock()
 		select {
 		case <-rc.done:

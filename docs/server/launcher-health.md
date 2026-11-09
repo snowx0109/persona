@@ -22,7 +22,7 @@ Now a hub manager (`server/internal/assistant/launcher_health*.go`) periodically
   If the probe passes (the launcher was fixed after the record, for example a CLI installed or a PATH corrected), the record is cleared to `ok` at once and the start stays on the asked machine.
   If it fails again, or the machine cannot answer, the usual reroute applies. Concurrent starts for the same machine × launcher wait for one probe (single flight), and a probe is not repeated
   within 30 seconds (`healthRecheckThrottle`), so a burst of starts does not turn into a burst of probes. This also covers the case where periodic checks are off: no manual button is needed.
-  Two records are never rechecked this way: `usage_limit` (the request would be refused until the reset anyway) and `not_in_terminal` (the probe's login shell runs the launcher, so it cannot
+  Two records are never rechecked this way: `usage_limit` (a probe spends a request the subscription would refuse while a reset is pending; records whose reset time is unknown leave to the periodic round, which re-probes them after its interval) and `not_in_terminal` (the probe's login shell runs the launcher, so it cannot
   reproduce the terminal's failure; only a real successful start clears it).
 - An Agent's own usage limit is recorded too (#1710, source `session`): when a turn ends on the subscription's usage limit (`docs/assistant/agent-work.md` "Usage limits") with a reset still ahead,
   and the session names its launcher, that launcher on that computer is marked `usage_limit` until the reset. Nothing runs for it: no check (it would spend a request to be refused) and no repair.
