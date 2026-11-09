@@ -40,6 +40,10 @@ const (
 
 // The classes of a launcher's error (classifyLauncherError).
 const (
+	// errKindOnboarding: Claude Code's first-run setup is unfinished (hasCompletedOnboarding is missing or false).
+	// Only a person at the machine can finish it, so it never enters auto repair; periodic and on-demand probes
+	// clear the record once setup is done.
+	errKindOnboarding  = "onboarding"
 	errKindModelRoute  = "model_route"
 	errKindAuth        = "auth"
 	errKindCLIOutdated = "cli_outdated"
@@ -602,7 +606,9 @@ var launcherErrorKinds = []struct {
 	kind string
 	re   *lazyre.Regexp
 }{
-	// First: the limit's words name no other cause, and its line may carry a prefix ("Error: …"). Claude Code's own
+	// First: its markers are specific to the node's onboarding messages (node/claudeonboarding.go).
+	{errKindOnboarding, lazyre.New(`hasCompletedOnboarding|first-run setup|首次引导`)},
+	// Then the limit: its words name no other cause, and its line may carry a prefix ("Error: …"). Claude Code's own
 	// line ("You've hit your session limit · resets 4:20pm (…)", an older "Claude AI usage limit reached|…") and
 	// Codex's (its message, its error kinds in a rollout and the app-server). A gateway's 429, "rate limit" or "quota"
 	// is not a subscription's limit and stays in its class.
@@ -624,10 +630,11 @@ func classifyLauncherError(text string) string {
 }
 
 // repairNow: a failure the repairs know right away; the others wait for a second one in a row. Never a usage limit,
-// however many in a row: nothing on the machine is broken, it waits for the reset.
+// however many in a row: nothing on the machine is broken, it waits for the reset. The same for an unfinished
+// first-run setup: only a person at the machine can finish it.
 func (r LauncherHealth) repairNow() bool {
 	switch r.Kind {
-	case errKindUsageLimit:
+	case errKindUsageLimit, errKindOnboarding:
 		return false
 	case errKindModelRoute, errKindAuth, errKindCLIOutdated:
 		return true

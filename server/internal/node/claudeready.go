@@ -148,6 +148,11 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 	if !running {
 		return nil, fmt.Errorf("claude did not start within %s: the tab's shell had not run it yet (is the machine busy?)", startWait)
 	}
+	// A start stuck on first-run screens the screen matching does not name: say so from the onboarding flag instead
+	// of leaving only the generic timeout (claudeonboarding.go).
+	if hint := n.onboardingBlockHint(ctx); hint != "" {
+		return nil, fmt.Errorf("claude did not become ready within %s of starting: %s", readyWait, hint)
+	}
 	return nil, fmt.Errorf("claude did not become ready within %s of starting", readyWait)
 }
 

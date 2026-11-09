@@ -28,11 +28,25 @@ func TestClassifyLauncherError(t *testing.T) {
 		`ERROR codex_models_manager: No Trae auth token available for Trae model fetch`:         errKindAuth,
 		`error: unknown option '--plugin-dir'`:                                                  errKindCLIOutdated,
 		`Claude Code version 2.0.1 is no longer supported, please update`:                       errKindCLIOutdated,
-		`zsh: command not found: work`:                                                          errKindOther,
+		`Claude Code 还没完成首次引导（hasCompletedOnboarding 未置为 true）：请在这台机器的终端里运行一次 claude`:                                                                             errKindOnboarding,
+		`claude did not become ready within 1m0s of starting: this machine's Claude Code has not completed its first-run setup (hasCompletedOnboarding is unset)`: errKindOnboarding,
+		`zsh: command not found: work`: errKindOther,
 	} {
 		if got := classifyLauncherError(text); got != want {
 			t.Errorf("%q: %s, want %s", text, got, want)
 		}
+	}
+}
+
+// First-run setup is a person's job: an onboarding failure never starts an automatic repair, however many probes
+// failed in a row; periodic and on-demand checks clear it once the setup is finished.
+func TestOnboardingFailureNeverRepairs(t *testing.T) {
+	r := LauncherHealth{Kind: errKindOnboarding, Fails: 5}
+	if r.repairNow() {
+		t.Fatal("an onboarding failure must never enter auto repair")
+	}
+	if (LauncherHealth{Kind: errKindOnboarding}).repairNow() {
+		t.Fatal("an onboarding failure must not repair on its first failure either")
 	}
 }
 

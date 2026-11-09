@@ -34,6 +34,14 @@ func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherChe
 			agent = d.Agent
 		}
 	}
+	if agent == "claude" {
+		// The headless probe below answers before Claude Code's first-run setup is finished, while an interactive
+		// start then stops on the first-run screens: fail with the cause instead of marking the launcher healthy
+		// (claudeonboarding.go). Unknown verdicts do not block; the real probe runs.
+		if ready, known := n.claudeOnboardingReady(ctx); known && !ready {
+			return proto.LauncherCheck{Agent: agent, Error: claudeOnboardingNotReadyMsg}
+		}
+	}
 	dir, err := os.MkdirTemp("", "persona-check-")
 	if err != nil {
 		return proto.LauncherCheck{Error: err.Error()}

@@ -9,6 +9,8 @@ Now a hub manager (`server/internal/assistant/launcher_health*.go`) periodically
 ## Checks
 
 - It reuses "Test availability" (`docs/integrations/launchers.md`): the node's `launchers.check` runs `claude -p … --max-turns 1` / `codex exec` once in an empty directory, with a 90-second timeout, spending a few tokens.
+- **Interactive-readiness pre-check for Claude** (#2018): before spending that request, the node reads `hasCompletedOnboarding` from Claude Code's global config (`.claude.json`, located by Claude Code's own rule, including a `CLAUDE_CONFIG_DIR` the login shell exports).
+  A headless `claude -p` probe answers even while the first-run setup is unfinished, but an interactive start then stops on the first-run screens (style picker, sign-in) and ends with a generic readiness timeout; the check therefore fails at once with an error that names the unfinished setup, without spending a request. A missing config file means Claude Code has never run there and counts as unfinished; an unreadable or malformed config is not a verdict and the real probe runs anyway. An interactive start that still reaches its readiness timeout gets the same explanation appended when the flag says the setup is unfinished.
 - When: it looks every 5 minutes (`healthTick`); on computers that are online (`Reachable`), any launcher last checked longer ago than the interval (default 30 minutes) is rerun.
   When a computer goes from offline to online, all its launchers are checked right away. Launchers on one computer run one after another (no burst of claude processes); computers run in parallel.
 - What is checked: launchers this computer can start (`machineLaunchers`: those from ~/.zshrc minus hidden ones, plus Persona-managed ones; `kind: api` launchers do not run on a computer and are not checked).
@@ -34,6 +36,7 @@ Now a hub manager (`server/internal/assistant/launcher_health*.go`) periodically
 
 | Category | Matches | Automatic repair |
 | --- | --- | --- |
+| `onboarding` | `hasCompletedOnboarding` missing or false: Claude Code's first-run setup is unfinished (the headless probe passes, an interactive start stalls on the first-run screens) | None, however many in a row: only a person at the machine can finish the setup. Stays `failing`; periodic and on-demand probes clear it to `ok` once setup is done |
 | `usage_limit` | Checked first: Claude Code's own line (`You've hit your session limit · resets 4:20pm (Area/City)`, also after a prefix such as `Error:`; an older `Claude AI usage limit reached`), Codex's (`You've hit your usage limit`, `usage_limit_exceeded`, `usageLimitExceeded`, `usage limit reached`). A gateway's generic 429, `rate limit` or `quota` stays in its own class | None, however many in a row: nothing on the computer is broken. Unavailable until the reset (below) |
 | `model_route` | `Bare Claude model name`, `cannot be routed`, `no account match`, model does not exist / not supported | Repair Agent (reconfigure the gateway's model) |
 | `auth` | 401 / 403, `invalid … api key`, `authentication_error`, `Not logged in`, expired token | Repair Agent (reconfigure the gateway's key) |
