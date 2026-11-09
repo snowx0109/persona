@@ -75,6 +75,9 @@ var (
 	repairDeadline = 45 * time.Minute
 	// healthCheckTimeout bounds one check (the node's own is 90 seconds).
 	healthCheckTimeout = 100 * time.Second
+	// healthRecheckThrottle: how long a failing launcher keeps the on-demand probe's answer instead of probing again,
+	// so a burst of starts does not turn into a burst of probes.
+	healthRecheckThrottle = 30 * time.Second
 )
 
 const defaultHealthInterval = 30 * time.Minute
@@ -144,8 +147,17 @@ type healthBook struct {
 	checking map[string]bool            // machines being checked now
 	// The app's starts answered at once (launcher_health_starts.go): those seen starting, by machine and session, and
 	// the failed ones already counted, when (kept with the records: healthStore.Counted).
-	starting map[[2]string]startWatch
-	counted  map[[2]string]time.Time
+	starting  map[[2]string]startWatch
+	counted   map[[2]string]time.Time
+	recheck   map[string]*healthRecheck // on-demand probes in flight, by healthKey
+	recheckAt map[string]time.Time      // last on-demand probe, by healthKey
+}
+
+// healthRecheck is an on-demand launcher probe one start is running and concurrent starts wait for.
+type healthRecheck struct {
+	done chan struct{}
+	res  healthResult
+	got  bool
 }
 
 func healthKey(machine, launcher string) string { return machine + "/" + launcher }
@@ -180,6 +192,9 @@ func (s *Service) healthLoadLocked(ctx context.Context) {
 	b.recs, b.repairs = map[string]*LauncherHealth{}, map[string]*machineRepair{}
 	if b.online == nil {
 		b.online, b.checking = map[string]bool{}, map[string]bool{}
+	}
+	if b.recheck == nil {
+		b.recheck, b.recheckAt = map[string]*healthRecheck{}, map[string]time.Time{}
 	}
 	var stored healthStore
 	if st := s.store(); st != nil {
@@ -717,6 +732,7 @@ func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, 
 	for key, r := range b.recs {
 		if r.Machine == d.ID && !slices.Contains(names, r.Launcher) {
 			delete(b.recs, key)
+			delete(b.recheckAt, key)
 		}
 	}
 	b.mu.Unlock()
@@ -803,6 +819,44 @@ func rehome(dir string, from, to Device) string {
 	return dir
 }
 
+// recheckLauncherNow probes machine's launcher on the spot when its record says the launcher fails, so a fix since
+// the last round (a CLI installed, a PATH corrected) clears the record and the start stays on the asked machine.
+// A probe already running is joined; a probe within healthRecheckThrottle is not repeated (checked=false), and the
+// caller keeps the usual reroute behavior. got=false means the machine could not be asked.
+func (s *Service) recheckLauncherNow(ctx context.Context, machine, launcher string) (res healthResult, got, checked bool) {
+	b := &s.health
+	key := healthKey(machine, launcher)
+	b.mu.Lock()
+	s.healthLoadLocked(ctx)
+	if rc := b.recheck[key]; rc != nil {
+		b.mu.Unlock()
+		select {
+		case <-rc.done:
+			return rc.res, rc.got, true
+		case <-ctx.Done():
+			return healthResult{}, false, false
+		}
+	}
+	if at := b.recheckAt[key]; !at.IsZero() && time.Since(at) < healthRecheckThrottle {
+		b.mu.Unlock()
+		return healthResult{}, false, false
+	}
+	rc := &healthRecheck{done: make(chan struct{})}
+	b.recheck[key] = rc
+	b.recheckAt[key] = time.Now()
+	b.mu.Unlock()
+	defer func() { // a panic must not leave waiters blocked on a channel that never closes
+		close(rc.done)
+		b.mu.Lock()
+		delete(b.recheck, key)
+		b.mu.Unlock()
+	}()
+
+	res, got = s.probeLauncherHealth(ctx, machine, launcher)
+	rc.res, rc.got = res, got
+	return res, got, true
+}
+
 // healthDetour is where a start with launcher on machine m goes instead: another machine when its last check failed
 // there and another has it healthy (moved), with a line saying so for whoever started it; no other: m, and the line
 // says it may fail. A usage limit with a known reset says when that is.
@@ -810,6 +864,16 @@ func (s *Service) healthDetour(ctx context.Context, m Device, launcher string) (
 	r, bad := s.launcherUnusable(ctx, m.ID, launcher)
 	if !bad {
 		return m, "", false
+	}
+	// The record can lag behind a fix: probe the machine once on the spot before moving the start elsewhere. A pass
+	// clears the record and the start stays on the asked machine (#2018). Two records cannot be settled by a probe:
+	// a subscription usage limit (the request would be refused too) and a launcher the terminal's shell cannot run
+	// (the probe's login shell runs it fine); only a real start clears those.
+	if r.Kind != errKindUsageLimit && r.Kind != errKindNotInTerminal {
+		if res, got, checked := s.recheckLauncherNow(ctx, m.ID, launcher); checked && got && res.ok {
+			s.recordHealth(ctx, m.ID, launcher, res)
+			return m, "", false
+		}
 	}
 	alt, moved := s.healthyMachine(ctx, launcher, m.ID)
 	if note := r.resetNote(); note != "" {

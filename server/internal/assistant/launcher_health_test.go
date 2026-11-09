@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -260,6 +262,188 @@ func TestLauncherHealthMovesPlannedTasks(t *testing.T) {
 	}
 	if task := p.Tasks[0]; task.Machine != "box" || task.Cwd != "/Users/me/code/app" || !strings.Contains(task.Why, "failed its health check on l4") {
 		t.Fatalf("task: %+v", task)
+	}
+}
+
+// A start aimed at a machine whose launcher has a failing record probes that machine once on the spot: when the
+// launcher works now (fixed since the record), the record is cleared and the start stays on the asked machine (#2018).
+func TestLauncherHealthRecheckClearsStaleRecord(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	ctx := context.Background()
+	s.healthRound(ctx, true) // l4/work fails and is blocked
+	if r := healthState(s, "l4", "work"); !r.unusable() {
+		t.Fatalf("seed record: %+v", r)
+	}
+	delete(f.checks, "l4/work") // the launcher was fixed after the record was written
+	n := len(f.checked)
+	res, err := s.runTool(ctx, "server", "conv9", "agent_start", json.RawMessage(`{"machine":"l4","cwd":"/home/me/code/app","prompt":"修 CI"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.checked) != n+1 || f.checked[n] != "l4/work" {
+		t.Fatalf("on-demand check: %v", f.checked[n:])
+	}
+	if r := healthState(s, "l4", "work"); r.State != healthOK || r.Fails != 0 || r.Source != "check" {
+		t.Fatalf("record not cleared: %+v", r)
+	}
+	if len(f.starts) != 1 || f.starts[0]["cwd"] != "/home/me/code/app" {
+		t.Fatalf("the start did not stay on l4: %v", f.starts)
+	}
+	if strings.Contains(res, "runs on") {
+		t.Fatalf("the start was rerouted: %s", res)
+	}
+}
+
+// An on-demand probe that still fails leaves the record untouched and the start reroutes as before; a second start
+// within healthRecheckThrottle trusts that answer and does not probe again. A machine that cannot answer the probe
+// gives no result and reroutes the same way.
+func TestLauncherHealthRecheckThrottleAndFailure(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	ctx := context.Background()
+	f.checks["server/work"] = proto.LauncherCheck{Error: "90 秒内没有回答"} // box is the only healthy alternative
+	s.healthRound(ctx, true)
+	before := healthState(s, "l4", "work")
+	n := len(f.checked)
+	res, err := s.runTool(ctx, "server", "conv9", "agent_start", json.RawMessage(`{"machine":"l4","cwd":"/home/me/code/app","prompt":"修 CI"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.checked) != n+1 || f.checked[n] != "l4/work" {
+		t.Fatalf("on-demand check: %v", f.checked[n:])
+	}
+	if len(f.starts) != 1 || f.starts[0]["cwd"] != "/Users/me/code/app" || !strings.Contains(res, "runs on box instead") {
+		t.Fatalf("not rerouted: starts %v, answer %s", f.starts, res)
+	}
+	if r := healthState(s, "l4", "work"); r.CheckedAt != before.CheckedAt || r.Fails != before.Fails || r.State != before.State {
+		t.Fatalf("the failed probe changed the record: before %+v, after %+v", before, r)
+	}
+
+	// Throttled: the next start does not probe again but still reroutes.
+	n = len(f.checked)
+	if _, err := s.runTool(ctx, "server", "conv10", "agent_start", json.RawMessage(`{"machine":"l4","cwd":"/home/me/code/app","prompt":"再修"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.checked) != n {
+		t.Fatalf("probed again within the throttle: %v", f.checked[n:])
+	}
+	if len(f.starts) != 2 {
+		t.Fatalf("starts: %v", f.starts)
+	}
+
+	// The node can no longer answer: the probe gives no result and the detour still moves the start to a healthy one.
+	l4 := f.devices[1]
+	f.mu.Lock()
+	delete(f.sessions, "l4")
+	f.mu.Unlock()
+	s.health.mu.Lock()
+	delete(s.health.recheckAt, healthKey("l4", "work"))
+	s.health.mu.Unlock()
+	if _, got, checked := s.recheckLauncherNow(ctx, "l4", "work"); !checked || got {
+		t.Fatalf("want no answer from the gone machine, got checked=%v got=%v", checked, got)
+	}
+	alt, _, moved := s.healthDetour(ctx, l4, "work")
+	if !moved || alt.ID != "box" {
+		t.Fatalf("unreachable detour: moved=%v alt=%s", moved, alt.ID)
+	}
+}
+
+// Records a probe cannot settle are not rechecked on the spot: a subscription usage limit (the request would be
+// refused too) and a launcher missing from the terminal's shell (the probe's login shell runs it fine).
+func TestLauncherHealthRecheckSkipsSpecialRecords(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	ctx := context.Background()
+	s.recordHealth(ctx, "l4", "work", healthResult{err: "usage limit reached", source: "check"})
+	if r := healthState(s, "l4", "work"); r.Kind != errKindUsageLimit {
+		t.Fatalf("seed usage_limit: %+v", r)
+	}
+	n := len(f.checked)
+	if _, note, moved := s.healthDetour(ctx, f.devices[1], "work"); !moved || !strings.Contains(note, "usage limit") {
+		t.Fatalf("usage limit detour: moved=%v note=%q", moved, note)
+	}
+	if len(f.checked) != n {
+		t.Fatalf("a usage limit was probed: %v", f.checked[n:])
+	}
+
+	editHealth(s, "l4", "work", func(r *LauncherHealth) {
+		r.State, r.Kind, r.BlockedReason = healthBlocked, errKindNotInTerminal, "the new tab's shell (bash) has no command work"
+	})
+	n = len(f.checked)
+	if _, note, moved := s.healthDetour(ctx, f.devices[1], "work"); !moved || !strings.Contains(note, errKindNotInTerminal) {
+		t.Fatalf("terminal detour: moved=%v note=%q", moved, note)
+	}
+	if len(f.checked) != n {
+		t.Fatalf("a terminal-shell record was probed: %v", f.checked[n:])
+	}
+}
+
+// Two starts for the same failing launcher at once run one on-demand probe; the second waits for its answer.
+func TestLauncherHealthRecheckSingleFlight(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	ctx := context.Background()
+	s.recordHealth(ctx, "l4", "work", healthResult{err: "broken", source: "check"})
+	delete(f.checks, "l4/work") // the probe now succeeds; the stale record is what is wrong
+	release, entered := make(chan struct{}), make(chan struct{})
+	f.onCheck = func(*fakeHub) {
+		close(entered)
+		<-release
+	}
+	type answer struct {
+		res     healthResult
+		got     bool
+		checked bool
+	}
+	answers := make(chan answer, 2)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		r, g, c := s.recheckLauncherNow(context.Background(), "l4", "work")
+		answers <- answer{r, g, c}
+	}()
+	<-entered
+	waitFor(t, "the in-flight probe", func() bool {
+		s.health.mu.Lock()
+		n := len(s.health.recheck)
+		s.health.mu.Unlock()
+		return n == 1
+	})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		r, g, c := s.recheckLauncherNow(context.Background(), "l4", "work")
+		answers <- answer{r, g, c}
+	}()
+	// Both callers must be parked in recheckLauncherNow before the probe is allowed to finish, or the second one
+	// could arrive after the cleanup and take the throttle branch instead of joining the probe.
+	waitFor(t, "the second caller to join the probe", func() bool {
+		var buf [64 * 1024]byte
+		n := runtime.Stack(buf[:], true)
+		return strings.Count(string(buf[:n]), "recheckLauncherNow") >= 2
+	})
+	close(release)
+	wg.Wait()
+	for i := 0; i < 2; i++ {
+		a := <-answers
+		if !a.checked || !a.got || !a.res.ok {
+			t.Fatalf("caller %d got %+v", i, a)
+		}
+	}
+	s.health.mu.Lock()
+	left := len(s.health.recheck)
+	s.health.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("in-flight entries left: %d", left)
+	}
+	f.mu.Lock()
+	probes := 0
+	for _, c := range f.checked {
+		if c == "l4/work" {
+			probes++
+		}
+	}
+	f.mu.Unlock()
+	if probes != 1 {
+		t.Fatalf("probes ran: %d", probes)
 	}
 }
 
