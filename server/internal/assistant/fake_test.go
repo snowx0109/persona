@@ -116,8 +116,11 @@ type fakeHub struct {
 	// The launchers' health (launcher_health.go): launchers.check's answers by "machine/launcher" (none: it works),
 	// the checks and repairs asked for, launchers.repair's answer (nil: the node has no such method) and what a repair
 	// does to the checks.
-	checks    map[string]proto.LauncherCheck
-	checked   []string
+	checks  map[string]proto.LauncherCheck
+	checked []string
+	// checkWait, when set, runs before each launchers.check is answered, outside the fake's lock, with the call's
+	// context: a check that takes its time; its error is the call's.
+	checkWait func(ctx context.Context) error
 	repairs   []map[string]any
 	repairRes *proto.LauncherRepair
 	onRepair  func(f *fakeHub)
@@ -179,6 +182,16 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 }
 
 func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == assistantwire.DeviceLaunchersCheck {
+		f.mu.Lock()
+		wait := f.checkWait
+		f.mu.Unlock()
+		if wait != nil {
+			if err := wait(ctx); err != nil {
+				return nil, err
+			}
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, p)

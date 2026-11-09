@@ -719,6 +719,9 @@ func (s *Service) readinessProbe(ctx context.Context, machine, launcher string) 
 		b.probing = nil
 		b.mu.Unlock()
 	}()
+	// The check goes on when the client stops waiting (its own time ran out, the page closed): its result is kept, and
+	// a try within readinessProbeReuse gets it instead of starting another check that is cut off at the same point (#1892).
+	ctx = context.WithoutCancel(ctx)
 	cctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
 	defer cancel()
 	var res proto.LauncherCheck

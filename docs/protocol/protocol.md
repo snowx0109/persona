@@ -769,7 +769,7 @@ Whether the main chat works right now and which step is missing is computed by t
 
 ```
 GET  /api/v1/assistant/readiness            → Readiness
-GET  /api/v1/assistant/readiness?probe=1    → Readiness, plus an actual one-word check (costs money; calls for the same computer and launcher within 30 seconds return the last result, and only one runs at a time)
+GET  /api/v1/assistant/readiness?probe=1    → Readiness, plus an actual one-word check (costs money; calls for the same computer and launcher within 30 seconds return the last result, and only one runs at a time; it runs to the end even if the client stops waiting, up to 100 s plus the 12 s self-check, so clients wait longer than that)
 POST /api/v1/assistant/readiness/dismiss    {"dismissed": true}  →  {"ok": true} (an empty body equals true; false undoes it)
 POST /api/v1/assistant/warm                 → {"ok": true, "readiness"?: Readiness} (same structure, no probe; if it can't finish within 2.5 seconds it returns the last recorded one, omitted if none was ever recorded)
 ```

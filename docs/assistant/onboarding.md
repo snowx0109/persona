@@ -460,6 +460,7 @@ Implementation (#3710, `server/internal/assistant/readiness.go`; endpoint detail
 - Warm computes readiness for at most 2.5 seconds; on timeout, return the last recorded result (omit `readiness` if none), and finish / persist in the background. Opening the tab does not slow down for this.
 - `machine_pending` appears after "Confirm computer" (5.3, item 9 in 7.2) merges; `node_outdated` (node does not understand model configuration) has no button.
 - `?probe=1` does not run unless computer is `ok`, and the response omits `probe`. A probe with no computer reply (offline, timeout) returns only `error`, is not recorded, and is not evidence.
+- The probe takes up to 100 seconds (`healthCheckTimeout`) plus GET's 12-second self-check. It does not stop when the client stops waiting: its result is recorded and the next try within 30 seconds gets it (#1892). Clients wait past that limit (web: `pastHub(PROBE_HUB_MS)`), and a try that gets no answer says so beside the button instead of showing an earlier try's result.
 - `dismiss` accepts `{"dismissed": false}` to undo; an empty body means `true`.
 - Once `first_message` succeeds, it stays `ok` (stored in `assistant.readiness`, even after main chat changes).
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -288,6 +289,48 @@ func TestReadinessProbe(t *testing.T) {
 	if r4 := getReadiness(t, s, "probe=1", ""); r4.Probe == nil || !r4.Probe.OK || readinessStep(t, r4, StepModel).State != StepOK ||
 		len(f.checked) != 2 || r4.Mode != ReadinessFull {
 		t.Fatalf("again later: %+v, checked %v", r4, f.checked)
+	}
+}
+
+// A client that stops waiting for its probe (its own time ran out, the page closed) does not cut the check off: the
+// result is kept, and the next try within the reuse window answers it instead of starting the check again (#1892).
+func TestReadinessProbeOutlivesTheClient(t *testing.T) {
+	f, s, _ := readyMachine(t)
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	var asked atomic.Int32 // the checks the node was asked for, the one cut off too
+	f.mu.Lock()
+	f.checkWait = func(ctx context.Context) error {
+		asked.Add(1)
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	f.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = serveHTTP(ctx, s, assistantwire.HTTPRequest{Method: "GET", Path: "/api/v1/assistant/readiness", Query: "probe=1"}, s.lang)
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the check never started")
+	}
+	cancel() // the client hangs up while the check runs
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	<-done
+	r := getReadiness(t, s, "probe=1", "")
+	if r.Probe == nil || !r.Probe.OK || asked.Load() != 1 {
+		t.Fatalf("the try after: %+v, checks asked for %d (want the first one's result, 1)", r.Probe, asked.Load())
 	}
 }
 
