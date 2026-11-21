@@ -709,6 +709,8 @@ func paneKindOK(n *Node, pane string) bool {
 		return n.hostEnabled(proto.EngineOrca)
 	case host.Tern:
 		return n.hostEnabled(proto.EngineTern)
+	case host.Rex:
+		return n.hostEnabled(proto.EngineRex)
 	}
 	return true
 }

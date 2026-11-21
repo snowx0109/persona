@@ -139,7 +139,7 @@ nonisolated enum CallEvent: Equatable, Sendable {
     case known
     case audioActivated
     case audioDeactivated
-    /// The conversation joined: the system accepts updates from now on (it discards them while idle).
+    /// A joined-state callback (also possible when just the conversation's attributes changed).
     case conversationJoined
     /// The conversation left without an End action (the system ended it).
     case systemEnded
@@ -213,6 +213,7 @@ nonisolated struct CallMachine: Equatable, Sendable {
     private(set) var everActive = false
     /// The conversation is in the system's list.
     private(set) var known = false
+    private var sentJoinedMembers = false
     /// Reports kept until the system knows the conversation.
     private(set) var pending: [CallReport] = []
     /// What the engine was last told about hold.
@@ -286,9 +287,9 @@ nonisolated struct CallMachine: Equatable, Sendable {
             out += activated()
 
         case .endAction:
+            // End's dated fulfilment acknowledges that local media has stopped, not a request to stop it.
+            if phase.isLive { out += end(phase == .ringing ? .declined : .hungUp, report: false) }
             out.append(.fulfil)
-            guard phase.isLive else { return out }
-            out += end(phase == .ringing ? .declined : .hungUp, report: false)
 
         case .muteAction(let on):
             out.append(.fulfil)
@@ -361,9 +362,9 @@ nonisolated struct CallMachine: Equatable, Sendable {
             }
 
         case .conversationJoined:
-            // The system discards conversationUpdated while the conversation is idle (#10495): the members update sent
-            // right after the Start's fulfil is lost. Once the conversation joins the system accepts it, so report again.
-            guard phase.isLive, known, direction == .outgoing else { return [] }
+            // Announce the active invitee once; a change callback for our own update can still say joined.
+            guard phase.isLive, known, direction == .outgoing, !sentJoinedMembers else { return [] }
+            sentJoinedMembers = true
             out += [.report(.members)]
 
         case .audioActivated:

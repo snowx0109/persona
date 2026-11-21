@@ -273,7 +273,12 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/file/convert
 -                    GET /api/v1/machines/{mid}/file/download
 -                    GET /api/v1/machines/{mid}/file/thumb
+-                    GET /api/v1/machines/{mid}/files/download
+-                    GET /api/v1/machines/{mid}/files/list
 -                    GET /api/v1/machines/{mid}/files/operations/{oid}
+-                    GET /api/v1/machines/{mid}/files/preview
+-                    GET /api/v1/machines/{mid}/files/roots
+-                    GET /api/v1/machines/{mid}/files/tail
 -                    GET /api/v1/machines/{mid}/fs
 -                    GET /api/v1/machines/{mid}/fs/find
 -                    GET /api/v1/machines/{mid}/git/blob
@@ -294,10 +299,12 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/launchers/{name}/start-options
 -                    GET /api/v1/machines/{mid}/omp-settings
 -                    GET /api/v1/machines/{mid}/panes
+-                    GET /api/v1/machines/{mid}/ports
 -                    GET /api/v1/machines/{mid}/ports/{port}
 -                    GET /api/v1/machines/{mid}/ports/{port}/connect
 -                    GET /api/v1/machines/{mid}/preview/connect
 -                    GET /api/v1/machines/{mid}/preview/servers
+-                    GET /api/v1/machines/{mid}/processes
 -                    GET /api/v1/machines/{mid}/screen/video/connect
 machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/managers
@@ -584,6 +591,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/panes/split
 -                    POST /api/v1/machines/{mid}/ports/{port}/open
 -                    POST /api/v1/machines/{mid}/preview/start
+-                    POST /api/v1/machines/{mid}/processes/{pid}/kill
 -                    POST /api/v1/machines/{mid}/reconnect
 -                    POST /api/v1/machines/{mid}/spaces/{wid}/rename
 -                    POST /api/v1/machines/{mid}/tabs/close

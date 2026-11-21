@@ -53,7 +53,7 @@ describe("engine choice (iOS EngineSelectionModel)", () => {
 
   it("lists every known engine when the node reports none (offline, older hubs)", () => {
     const m = machine({ engine: "future" });
-    expect(engineOptions(m).map((e) => e.id)).toEqual(["herdr", "herdr-core", "herdr-both", "orca", "tern", "paseo", "cindy"]);
+    expect(engineOptions(m).map((e) => e.id)).toEqual(["herdr", "herdr-core", "herdr-both", "orca", "tern", "rex", "paseo", "cindy"]);
     expect(engineOptions(m).every((e) => !e.available)).toBe(true);
     expect(engineOptions({ engines: [] }).length).toBe(KNOWN_ENGINES.length);
     // known ones stay selectable offline; an unknown one only while reported available
@@ -69,6 +69,8 @@ describe("engine choice (iOS EngineSelectionModel)", () => {
     expect(engineDetail("paseo")).toBe("Paseo 里的 Agent");
     expect(engineName("tern")).toBe("Tern");
     expect(engineDetail("tern")).toBe("Tern 里的终端");
+    expect(engineName("rex")).toBe("Rex");
+    expect(engineDetail("rex")).toBe("Rex 里的终端");
     expect(engineName("cindy")).toBe("Cindy");
     expect(engineDetail("cindy")).toBe("Cindy 里的 Agent");
     expect(engineDetail("future")).toBeUndefined();
@@ -150,7 +152,7 @@ describe("engine host sets (#2576)", () => {
     expect(hostOptions(m).map((e) => e.id)).toEqual(["herdr", "orca", "tern", "paseo"]);
     const offline = hostOptions(machine());
     expect(offline.map((e) => e.id)).toEqual(ENGINE_HOSTS);
-    expect(offline.map((e) => e.name)).toEqual(["herdr", "Herdr App", "Orca", "Tern", "Paseo", "Cindy"]);
+    expect(offline.map((e) => e.name)).toEqual(["herdr", "Herdr App", "Orca", "Tern", "Rex", "Paseo", "Cindy"]);
   });
 
   it("offers every enabled host to start in", () => {

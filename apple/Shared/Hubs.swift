@@ -356,6 +356,16 @@ nonisolated enum HubRoute {
     }
 
     typealias Probe = @Sendable (Candidate) async -> Bool
+    /// A probe that says what the try came to (#11390), not only whether the candidate passed.
+    typealias Check = @Sendable (Candidate) async -> HubOutcome
+
+    /// One candidate's part in an attempt: what its probe came to and when (`at`: when the attempt learned it, for a
+    /// probe the picker cut short the moment it stopped waiting).
+    struct Tried: Hashable, Sendable {
+        var candidate: Candidate
+        var outcome: HubOutcome
+        var at: Date
+    }
 
     /// How long a candidate that answered first waits for a preferred one (the center, a hub's earlier address) to
     /// answer too.
@@ -375,48 +385,108 @@ nonisolated enum HubRoute {
     /// `pick`, but nil when none answers, and a single candidate is asked too: whether the group can be reached
     /// directly at all (its SSH tunnel is the way when not, docs/operations/network.md「Connecting to hub through SSH」).
     static func answering(_ candidates: [Candidate], grace: Duration = centerGrace, probe: @escaping Probe = healthProbe) async -> Candidate? {
-        guard !candidates.isEmpty else { return nil }
-        enum Answer: Sendable { case reached(Int), missed(Int), graceOver }
+        await race(candidates, grace: grace, check: { await probe($0) ? .answers : .unreachable }).winner
+    }
+
+    /// `pick` with what each candidate's probe came to: the same choice, at the same moment.
+    static func pickTried(_ candidates: [Candidate], grace: Duration = centerGrace,
+                          check: @escaping Check = healthCheck) async -> (picked: Candidate?, tried: [Tried]) {
+        guard candidates.count > 1 else { return (candidates.first, []) }
+        let r = await race(candidates, grace: grace, check: check)
+        return (r.winner ?? candidates.first, r.tried)
+    }
+
+    /// `answering` with what each candidate's probe came to.
+    static func answeringTried(_ candidates: [Candidate], grace: Duration = centerGrace,
+                               check: @escaping Check = healthCheck) async -> (winner: Candidate?, tried: [Tried]) {
+        let r = await race(candidates, grace: grace, check: check)
+        return (r.winner, r.tried)
+    }
+
+    /// The race `pick` and `answering` run: every candidate's probe at once, the best-ranked that answers taken as
+    /// `pick` says. Probes still running when it is decided are cancelled and count as unknown (#11390).
+    private static func race(_ candidates: [Candidate], grace: Duration, check: @escaping Check) async -> (winner: Candidate?, tried: [Tried]) {
+        guard !candidates.isEmpty else { return (nil, []) }
+        enum Answer: Sendable { case done(Int, HubOutcome), graceOver }
         return await withTaskGroup(of: Answer.self) { group in
-            for (i, c) in candidates.enumerated() { group.addTask { await probe(c) ? .reached(i) : .missed(i) } }
+            for (i, c) in candidates.enumerated() { group.addTask { .done(i, await check(c)) } }
             var pending = Set(candidates.indices)
             var best: Candidate?
+            var got: [Int: (HubOutcome, Date)] = [:]
+            func decided() -> (winner: Candidate?, tried: [Tried]) {
+                let now = Date()
+                let tried = candidates.indices.map { i in
+                    Tried(candidate: candidates[i], outcome: got[i]?.0 ?? .unknown, at: got[i]?.1 ?? now)
+                }
+                return (best, settled(tried, among: candidates))
+            }
             for await answer in group {
                 switch answer {
-                case .reached(let i):
+                case .done(let i, let outcome):
                     pending.remove(i)
-                    if best == nil { group.addTask { try? await Task.sleep(for: grace); return .graceOver } }
-                    if best.map({ candidates[i].rank < $0.rank }) ?? true { best = candidates[i] }
-                case .missed(let i):
-                    pending.remove(i)
+                    got[i] = (outcome, Date())
+                    if outcome == .answers {
+                        if best == nil { group.addTask { try? await Task.sleep(for: grace); return .graceOver } }
+                        if best.map({ candidates[i].rank < $0.rank }) ?? true { best = candidates[i] }
+                    }
                 case .graceOver:
                     group.cancelAll()
-                    return best
+                    return decided()
                 }
                 if let best, !pending.contains(where: { candidates[$0].rank < best.rank }) {
                     group.cancelAll()
-                    return best
+                    return decided()
                 }
             }
-            return best
+            return decided()
         }
+    }
+
+    /// Another hub answering a private address (a LAN IPv4 address, ULA, link-local, `.local`) says only that this
+    /// network has another device there, not that someone else answers for the hub: couldn't connect, unless every
+    /// address the attempt tries (`among`) is private, when nothing else could say more (as Android's
+    /// `HubRouteSelector.worst`).
+    static func settled(_ tried: [Tried], among candidates: [Candidate]) -> [Tried] {
+        let onlyPrivate = candidates.allSatisfy { HubAddressScope.isPrivate($0.url) }
+        return tried.map { t in
+            guard t.outcome == .notYourHub, !onlyPrivate, HubAddressScope.isPrivate(t.candidate.url) else { return t }
+            var t = t
+            t.outcome = .unreachable
+            return t
+        }
+    }
+
+    /// The same address however the candidates list writes it (their own dedupe key): its URL without a trailing `/`.
+    static func key(_ url: URL) -> String {
+        url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
     /// Whether the hub answers at its own address (never through its SSH tunnel: this is how the app finds out it
     /// does not need it). An added address must answer as the paired hub (docs/operations/network.md "Client-added
     /// candidates"); the answer is only evidence the address reaches it, never a source of trust.
-    static let healthProbe: Probe = { candidate in
+    static let healthProbe: Probe = { await healthCheck($0) == .answers }
+
+    /// `healthProbe` with why it failed (#11390): passes (`answers`) exactly when `healthProbe` does.
+    static let healthCheck: Check = { candidate in
         let config = candidate.config
         var req = URLRequest(url: APIClient(config: config).url("/api/v1/health", direct: true), timeoutInterval: 3)
         req.httpMethod = "GET"
         RequestClientMetadata.current.apply(to: &req)
         CloudflareAccess.apply(config.access, to: &req, hub: config.url) // Access in front would answer with its login
-        guard let (data, resp) = try? await URLSession.shared.data(for: req, delegate: HubRedirects.shared),
-              (resp as? HTTPURLResponse)?.statusCode == 200,
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        let data: Data, resp: URLResponse
+        do {
+            (data, resp) = try await URLSession.shared.data(for: req, delegate: HubRedirects.shared)
+        } catch {
+            return HubOutcome(failure: error)
+        }
+        guard (resp as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .unreachable }
         // Known hub_id: the answer must carry the same one (an answer without it could be any server, or an older hub).
-        if let want = candidate.hubID, !want.isEmpty, obj["hub_id"] as? String != want { return false }
-        return obj["ok"] as? Bool == true
+        if let want = candidate.hubID, !want.isEmpty, obj["hub_id"] as? String != want {
+            if let other = obj["hub_id"] as? String, !other.isEmpty { return .notYourHub }
+            return .unreachable
+        }
+        return obj["ok"] as? Bool == true ? .answers : .unreachable
     }
 }
 

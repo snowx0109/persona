@@ -40,6 +40,8 @@ interface SessionsRepository {
     /** Capabilities of the hub owning this machine; merged lists must not borrow the selected hub's. */
     fun supportsFeature(machineId: String, feature: String): Boolean = false
     suspend fun refresh()
+    /** Refresh only the hub that owns this machine; merged repositories must not let another hub's success hide its failure. */
+    suspend fun refreshMachine(machineId: String) = refresh()
     suspend fun setListFilter(filter: SessionListFilter) {}
     /** Hub-group scope, separate from the server's machine-local group filter; null includes all hubs. */
     suspend fun setListNamespaces(namespaces: Set<String?>?) {}

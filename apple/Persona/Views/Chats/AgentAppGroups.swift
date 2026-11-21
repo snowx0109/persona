@@ -42,7 +42,7 @@ nonisolated enum AppGroups {
     private static let known = ["Claude Code", "Codex"]
     /// The terminal engines with a section of their own, in this order, after the desktop apps (`space_kind` as the node
     /// sends it: the host it placed the agent in).
-    static let engines: [MachineEngine] = [.herdr, .herdrApp, .orca, .tern]
+    static let engines: [MachineEngine] = [.herdr, .herdrApp, .orca, .tern, .rex]
 
     /// The terminal engine an agent runs in, from the host the node placed it in; nil for none (a terminal or tmux pane
     /// outside the engines, a runtime, an agent the node did not place).

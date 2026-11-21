@@ -313,6 +313,23 @@ class GroupRoutingTest {
         assertEquals("s+s", merged.scope)
     }
 
+    @Test fun aTargetedSessionRefreshReadsOnlyItsHubAndKeepsThatHubsFailure() = runBlocking<Unit> {
+        val calls = mutableListOf<String>()
+        val failed = assertThrows(java.io.IOException::class.java) {
+            runBlocking {
+                refreshOwnedSessions("macbook~g0a1b2c3d") { namespace, raw ->
+                    calls += "$namespace:$raw"
+                    // Another hub's healthy all-hubs refresh must not turn this owning-hub failure into success.
+                    throw java.io.IOException("owning hub unavailable")
+                }
+            }
+        }
+        assertEquals("owning hub unavailable", failed.message)
+        assertEquals(listOf("g0a1b2c3d:macbook"), calls)
+        refreshOwnedSessions("macbook") { namespace, raw -> calls += "$namespace:$raw" }
+        assertEquals(listOf("g0a1b2c3d:macbook", "null:macbook"), calls)
+    }
+
     /** A hub's machine management that records what it was asked (plain ids only), as a group's fake hub. */
     private class FakeMachines(val hub: String) : MachineManagement {
         val calls = mutableListOf<String>()
@@ -320,6 +337,8 @@ class GroupRoutingTest {
         override suspend fun launcherQuota(machineId: String, name: String, refresh: Boolean) =
             persona.core.contracts.api.LauncherQuotaAnswer(machine = machineId).also { calls += "quota $machineId $name $refresh" }
         override suspend fun reconnect(machineId: String) { calls += "reconnect $machineId" }
+        override suspend fun startLinkSwitch(machineId: String) =
+            MachineLinkSwitch(available = false, phase = "checking").also { calls += "link switch $machineId" }
         override suspend fun deploy(machineId: String) { calls += "deploy $machineId" }
         override suspend fun herdr(machineId: String) = HerdrState(false, false, true).also { calls += "herdr $machineId" }
         override suspend fun startHerdr(machineId: String) = HerdrState(false, true, true).also { calls += "start herdr $machineId" }
@@ -356,6 +375,7 @@ class GroupRoutingTest {
                 if (other.owns(machineId)) call(work.inGroup(other)) else call(home.inGroup(primary))
         })
         managed.reconnect("macbook~g0a1b2c3d")
+        assertEquals("checking", managed.startLinkSwitch("macbook~g0a1b2c3d").phase)
         managed.deploy("macbook~g0a1b2c3d")
         managed.launchers("macbook~g0a1b2c3d")
         managed.claudeSettings("macbook~g0a1b2c3d")
@@ -369,7 +389,7 @@ class GroupRoutingTest {
         assertEquals(HerdrState(false, false, true), managed.herdr("macbook~g0a1b2c3d"))
         assertEquals(HerdrState(false, true, true), managed.startHerdr("macbook~g0a1b2c3d"))
         val changed = managed.setEngine("macbook~g0a1b2c3d", "orca")
-        assertEquals(listOf("reconnect macbook", "deploy macbook", "launchers macbook", "settings macbook",
+        assertEquals(listOf("reconnect macbook", "link switch macbook", "deploy macbook", "launchers macbook", "settings macbook",
             "quota macbook cc_main true", "set macbook model", "codex settings macbook", "set codex macbook model",
             "agy settings macbook", "set agy macbook toolPermission",
             "herdr macbook", "start herdr macbook", "engine macbook orca"), work.calls)

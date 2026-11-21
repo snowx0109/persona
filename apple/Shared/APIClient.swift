@@ -940,6 +940,16 @@ nonisolated struct APIClient: Sendable {
     }
     /// The hub installs its own personad build on the machine and reconnects; progress comes with the machine list.
     func deploy(machine: String) async throws { try await post("/api/v1/machines/\(machine)/deploy") }
+    /// Starts the one confirmed switch from SSH to Persona Link (#10662). The accepted state is immediate; the machine
+    /// list then carries every later phase. Callers never repeat this request when its answer is uncertain.
+    func startLinkSwitch(machine: String) async throws -> MachineLinkSwitch {
+        nonisolated struct R: Decodable, Sendable {
+            var linkSwitch: MachineLinkSwitch
+            enum CodingKeys: String, CodingKey { case linkSwitch = "link_switch" }
+        }
+        let id = machine.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? machine
+        return try await post("/api/v1/machines/\(id)/link-switch", as: R.self).linkSwitch
+    }
 
     /// Every machine's latest sample and its last hour by minute (docs/server/machines.md).
     func metricsOverview() async throws -> [MachineMetrics] {

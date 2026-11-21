@@ -1,11 +1,15 @@
 package persona.feature.machines
 
+import android.content.ContextWrapper
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation3.runtime.EntryProviderScope
 import androidx.navigation3.runtime.NavKey
@@ -36,16 +40,43 @@ fun EntryProviderScope<NavKey>.machinesEntries(
     extensionSections: (@Composable (String) -> (LazyListScope.() -> Unit))? = null,
     /** "Add a computer" and "Confirm computer" (docs/assistant/onboarding.md 4.2); null in demo mode. */
     computers: ComputerPairing? = null,
+    /** Pairing generation from ShellSession: an accepted operation must never cross an unpair/re-pair boundary. */
+    operationScope: String = "",
 ) {
-    entry<MachinesRoute> { MachinesRouteContent(null, navigator, metrics, sessions, management, launcherPages, null, computers) }
-    entry<MachineDetailRoute> { MachinesRouteContent(it.machineId, navigator, metrics, sessions, management, launcherPages, extensionSections, computers) }
+    entry<MachinesRoute> { MachinesRouteContent(null, navigator, metrics, sessions, management, launcherPages, null, computers, operationScope) }
+    entry<MachineDetailRoute> { MachinesRouteContent(it.machineId, navigator, metrics, sessions, management, launcherPages, extensionSections, computers, operationScope) }
     entry<AddComputerRoute> { AddComputerPage(computers, sessions.machines, it.confirm, navigator::back) }
+}
+
+@Composable
+internal fun rememberMachineActions(
+    management: MachineManagement?,
+    sessions: SessionsRepository,
+    machineId: String?,
+    operationScope: String = "",
+): MachineActionsViewModel? {
+    val localOwner = LocalViewModelStoreOwner.current
+    val context = LocalContext.current
+    // Navigation entries and retained tabs can show the same computer in separate stores. The activity owns this
+    // operation state so closing/reopening a detail or opening its second retained copy cannot start it twice.
+    val owner = remember(context, localOwner) {
+        generateSequence(context) { current ->
+            (current as? ContextWrapper)?.baseContext?.takeIf { it !== current }
+        }.filterIsInstance<ViewModelStoreOwner>().firstOrNull() ?: localOwner
+    }
+    return management?.let {
+        viewModel(viewModelStoreOwner = requireNotNull(owner),
+            key = "machine-actions:$operationScope:${System.identityHashCode(it)}:${machineId.orEmpty()}") {
+                MachineActionsViewModel(it, sessions)
+            }
+    }
 }
 
 @Composable
 private fun MachinesRouteContent(
     id: String?, navigator: Navigator, api: MachineMetricsApi, sessions: SessionsRepository, management: MachineManagement?,
     launcherPages: Flow<Boolean>, extensionSections: (@Composable (String) -> (LazyListScope.() -> Unit))?, computers: ComputerPairing?,
+    operationScope: String,
 ) {
     val launchers by launcherPages.collectAsState(false)
     // "Add a computer" opens its page only on a hub with machines_add; an older one keeps the help dialog.
@@ -54,9 +85,7 @@ private fun MachinesRouteContent(
         val model = viewModel(key = "machines:${System.identityHashCode(api)}:${id.orEmpty()}") {
             MachinesViewModel(api, sessions, id)
         }
-        val actions = management?.let {
-            viewModel(key = "machine-actions:${System.identityHashCode(it)}:${id.orEmpty()}") { MachineActionsViewModel(it, sessions) }
-        }
+        val actions = rememberMachineActions(management, sessions, id, operationScope)
         val health = management?.let {
             viewModel(key = "machine-health:${System.identityHashCode(it)}:${id.orEmpty()}") { MachineHealthViewModel(it) }
         }

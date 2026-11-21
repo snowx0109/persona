@@ -40,6 +40,8 @@
   "view_label": "显示方式",
   "view_cards": "卡片",
   "view_capabilities": "能力",
+  "view_procs": "端口与进程",
+  "view_files": "文件",
   "battery": "电量",
   "charging": "充电中",
   "temperature": "温度"

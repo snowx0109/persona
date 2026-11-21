@@ -172,9 +172,11 @@ func (n *Node) claudeStatus(id string, a host.Agent, now time.Time) string {
 			m, mod, hasFile = n.meta(p, st), st.ModTime(), true
 		}
 	}
-	if a.AgentStatus == proto.StatusUnknown && host.ParsePane(a.PaneID).Kind == host.Tern {
-		if s := n.ternClaudeStatus(id, a.PaneID, hasFile); s != "" {
-			return s
+	if a.AgentStatus == proto.StatusUnknown {
+		if k := host.ParsePane(a.PaneID).Kind; k == host.Tern || k == host.Rex {
+			if s := n.ternClaudeStatus(id, a.PaneID, hasFile); s != "" {
+				return s
+			}
 		}
 	}
 	// When the transcript last said something: its newest timed line, not its mtime (#5967); the mtime when the tail has
@@ -206,8 +208,8 @@ func (n *Node) claudeStatus(id string, a host.Agent, now time.Time) string {
 	return a.AgentStatus
 }
 
-// ternClaudeStatus is what a Claude in a Tern block says of itself, "" when it says nothing. Tern reports no agent
-// state (ternAgent), so a Claude there was judged by its transcript alone (#6312): a question it asked read as working
+// ternClaudeStatus is what a Claude in a Tern or Rex block says of itself, "" when it says nothing. Neither reports agent
+// state (ternAgent, rexAgent), so a Claude there was judged by its transcript alone (#6312): a question it asked read as working
 // while the transcript was fresh, then as unknown, which the overview does not list, and it never needed the user.
 // Claude Code keeps its own state in its sessions/<pid>.json (the pid of the block's claude, the file that names its
 // session): busy, idle (or shell: idle with background commands running), or waiting while a dialog of its own has the
@@ -249,7 +251,7 @@ func restingClaude(a host.Agent, status string) bool {
 	if a.Agent != "claude" || a.PaneID == "" {
 		return false
 	}
-	if k := host.ParsePane(a.PaneID).Kind; k != host.Herdr && k != host.Tern {
+	if k := host.ParsePane(a.PaneID).Kind; k != host.Herdr && k != host.Tern && k != host.Rex {
 		return false
 	}
 	return status == proto.StatusDone || status == proto.StatusIdle || status == proto.StatusUnknown

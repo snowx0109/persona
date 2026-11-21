@@ -125,7 +125,7 @@ nonisolated enum AgentWorktree: Sendable {
     static func isInUse(_ error: Error) -> Bool { (error as? APIError)?.code == "worktree_in_use" }
 
     /// The engines that make a session's own worktree, as `worktree/status` and `worktree/remove` take them (`kind`).
-    static let engines: Set<String> = ["herdr", "herdr-core", "orca", "tern", "paseo", "cindy"]
+    static let engines: Set<String> = ["herdr", "herdr-core", "orca", "tern", "rex", "paseo", "cindy"]
 
     /// The engine a session runs in, which made its own worktree (Paseo makes its own): its terminal's host, else the
     /// runtime engine its space is; nil when it names neither, and the computer's default decides.

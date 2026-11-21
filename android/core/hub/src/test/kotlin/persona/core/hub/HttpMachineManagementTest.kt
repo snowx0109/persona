@@ -146,6 +146,47 @@ class HttpMachineManagementTest {
         assertEquals(HubError.Protocol, (runCatching { machines.claudeLiveReplies("desk") }.exceptionOrNull() as HubFailure).kind)
     }
 
+    @Test fun linkSwitchPostsOnceAndDecodesTheAcceptedState() = withHub { server, machines ->
+        server.enqueue(MockResponse().setResponseCode(202).setBody(
+            """{"link_switch":{"available":false,"reason":"in_progress","phase":"checking",
+              "rollback_unconfirmed":false,"at":"2026-11-19T16:00:05+08:00","future":true}}""",
+        ))
+        val state = machines.startLinkSwitch("desk/name")
+        assertFalse(state.available)
+        assertEquals("in_progress", state.reason)
+        assertEquals("checking", state.phase)
+        assertEquals("2026-11-19T08:00:05Z", state.at)
+        server.takeRequest().let {
+            assertEquals("POST", it.method)
+            assertEquals("/api/v1/machines/desk%2Fname/link-switch", it.path)
+            assertEquals("{}", it.body.readUtf8())
+        }
+        server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"already running","code":"in_progress"}"""))
+        val refused = runCatching { machines.startLinkSwitch("desk/name") }.exceptionOrNull() as HubFailure
+        assertEquals(409, refused.status)
+        assertEquals("in_progress", refused.code)
+        server.takeRequest()
+        server.enqueue(MockResponse().setResponseCode(403).setBody("""{"error":"full access required","code":"forbidden"}"""))
+        assertEquals(403, (runCatching { machines.startLinkSwitch("desk/name") }.exceptionOrNull() as HubFailure).status)
+        server.takeRequest()
+        assertEquals(3, server.requestCount)
+    }
+
+    @Test fun linkSwitchRejectsAnAnswerItCannotTrust() = withHub { server, machines ->
+        repeat(4) { index ->
+            server.enqueue(MockResponse().setResponseCode(202).setBody(when (index) {
+                0 -> """{}"""
+                1 -> """{"link_switch":{"phase":"checking"}}"""
+                2 -> """{"link_switch":{"available":true,"phase":"failed","rollback_unconfirmed":"true"}}"""
+                else -> """{"link_switch":{"available":"yes"}}"""
+            }))
+            val failure = runCatching { machines.startLinkSwitch("desk") }.exceptionOrNull() as HubFailure
+            assertEquals(HubError.Protocol, failure.kind)
+            server.takeRequest()
+        }
+        assertEquals(4, server.requestCount)
+    }
+
     @Test fun launchersReconnectAndDeployGoToTheMachine() = withHub { server, machines ->
         server.enqueue(MockResponse().setBody("""{"launchers":[{"name":"claude","model":"opus"},{"name":"codex","agent_type":"codex"}]}"""))
         val launchers = machines.launchers("mac/one")

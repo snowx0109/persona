@@ -35,12 +35,24 @@ type layout struct {
 // the agents it gave last. A host that is not running (host.ErrNotRunning: herdr-core without its socket) answered: it
 // has no agents.
 func (n *Node) refreshHosts(ctx context.Context, only ...host.Host) error {
-	return n.refreshHostInventory(ctx, false, only...)
+	return n.refreshHostInventoryWithFailures(ctx, false, nil, only...)
+}
+
+// refreshHostsWithFailures refreshes only (or every host when empty) and reports which host kinds failed to answer.
+// host.ErrNotRunning counts as an answer (not a failure).
+func (n *Node) refreshHostsWithFailures(ctx context.Context, only ...host.Host) (map[string]bool, error) {
+	failed := map[string]bool{}
+	err := n.refreshHostInventoryWithFailures(ctx, false, failed, only...)
+	return failed, err
 }
 
 // refreshHostInventory retains the display's tolerant refresh by default. An
 // update evidence producer must request every host and reject cached fallbacks.
 func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...host.Host) error {
+	return n.refreshHostInventoryWithFailures(ctx, strict, nil, only...)
+}
+
+func (n *Node) refreshHostInventoryWithFailures(ctx context.Context, strict bool, failed map[string]bool, only ...host.Host) error {
 	if n.sessionScope != nil {
 		if strict {
 			return errors.New("scoped node cannot attest complete host inventory")
@@ -118,6 +130,9 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 		if o.err != nil {
 			if firstErr == nil {
 				firstErr = o.err
+			}
+			if failed != nil {
+				failed[o.kind] = true
 			}
 			o.agents = n.hostAgents[o.kind]
 		} else {

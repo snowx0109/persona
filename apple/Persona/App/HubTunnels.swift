@@ -140,6 +140,11 @@ struct HubTunnel: Hashable {
     var done = false
 }
 
+/// What the restore race's direct probes came to (`AppModel.restoreRace`).
+@MainActor private final class Asked {
+    var tried: [HubRoute.Tried] = []
+}
+
 extension AppModel {
     // MARK: Tunnels to the hub (docs/operations/network.md「Connecting to hub through SSH」「经 App 内隧道连 hub」)
 
@@ -177,6 +182,7 @@ extension AppModel {
     func tunnelRoute(_ group: String) async -> ServerConfig? {
         guard !Task.isCancelled else { return nil }
         tunnelRecoveries.removeValue(forKey: group)?.cancel()
+        let attemptStart = Date() // what its direct check learns after the app went to the background was cut short
         let candidates = HubRoute.candidates(registry, group: group)
         let tunnels = hubTunnels(group)
         let options = tunnels.map {
@@ -195,8 +201,7 @@ extension AppModel {
                 let owner = UUID()
                 let recovery = HubTunnelRecovery { SSHTunnels.shared.close(t.hub.id, openedBy: owner) }
                 tunnelRecoveries[group] = recovery
-                let result = await recovery.pick(direct: { await HubRoute.answering(candidates) },
-                                                 tunnel: { await t.open(owner: owner) })
+                let result = await restoreRace(group, recovery, candidates, since: attemptStart) { await t.open(owner: owner) }
                 if tunnelRecoveries[group] === recovery { tunnelRecoveries[group] = nil }
                 guard !Task.isCancelled, !recovery.cancelled else { recovery.cancel(); return nil }
                 switch result {
@@ -225,8 +230,10 @@ extension AppModel {
                     return tried
                 }
                 defer { warming?.cancel() }
-                direct = await HubRoute.answering(candidates)
+                let asked = await HubRoute.answeringTried(candidates, check: routeCheck)
+                attemptTried(group, asked.tried, since: attemptStart)
                 guard !Task.isCancelled else { return nil }
+                direct = asked.winner
                 seen.direct = direct != nil
                 if let warming {
                     let tried = await withTaskCancellationHandler {
@@ -248,6 +255,26 @@ extension AppModel {
         }
     }
 
+    /// The `.restore` step's race (#11683): a closed SSH tunnel used last time against the group's own addresses, with
+    /// what each address's probe came to on the lines and in the tally, however the race ends (#11390): a direct
+    /// address won, the tunnel did, nothing answered, or the pick was cancelled (probes cut short are Unknown). Only a
+    /// direct winner hands the socket the addresses that answered: through the tunnel, the socket's failure is the
+    /// tunnel's, and a cancelled pick's answers are not the next attempt's. `.cancelled` when cancelled meanwhile.
+    func restoreRace(_ group: String, _ recovery: HubTunnelRecovery, _ candidates: [HubRoute.Candidate], since attemptStart: Date,
+                     tunnel: @escaping @MainActor () async -> Bool) async -> HubTunnelRecovery.Result {
+        let check = routeCheck, asked = Asked()
+        // `pick` waits for its direct side, cancelled or not, before it returns: `asked` is complete by then.
+        let result = await recovery.pick(direct: {
+            let r = await HubRoute.answeringTried(candidates, check: check)
+            asked.tried = r.tried
+            return r.winner
+        }, tunnel: tunnel)
+        tried(group, asked.tried, since: attemptStart)
+        guard !Task.isCancelled, !recovery.cancelled else { return .cancelled }
+        if case .direct = result { attemptAnswered(group, asked.tried, since: attemptStart) }
+        return result
+    }
+
     /// `t` carries its hub's traffic: the hub's other tunnel closes (both route the same hub address in HubTransport, so
     /// the one left open would later clear the route of the one in use).
     private func only(_ t: HubTunnel, of tunnels: [HubTunnel]) -> HubTunnel {
@@ -259,7 +286,10 @@ extension AppModel {
     private func through(_ t: HubTunnel, _ group: String) -> ServerConfig {
         t.watchDirect(answers: { [weak self] in
             guard let self else { return false }
-            return await HubRoute.answering(HubRoute.candidates(self.registry, group: group)) != nil
+            let start = Date()
+            let asked = await HubRoute.answeringTried(HubRoute.candidates(self.registry, group: group), check: self.routeCheck)
+            self.tried(group, asked.tried, since: start)
+            return asked.winner != nil
         }, moveBack: { [weak self] in self?.link(group)?.live.reroute() })
         return t.hub.config
     }

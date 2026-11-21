@@ -42,6 +42,8 @@
   "view_label": "View",
   "view_cards": "Cards",
   "view_capabilities": "Capabilities",
+  "view_procs": "Ports & Processes",
+  "view_files": "Files",
   "battery": "Battery",
   "charging": "charging",
   "temperature": "Temp"

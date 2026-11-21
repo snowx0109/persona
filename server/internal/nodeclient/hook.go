@@ -25,6 +25,7 @@ const (
 	OrcaPaneEnv       = "ORCA_PANE_KEY"     // Orca
 	OrcaLegacyPaneEnv = "ORCA_AGENT_PANE"   // older Orca
 	TernPaneEnv       = "TERN_PANE"         // Tern
+	RexPaneEnv        = "REX_BLOCK"         // Rex
 )
 
 // GlobalHookFlag marks the report-only entries the node puts in the user's own Claude Code settings
@@ -55,6 +56,9 @@ func HookPane(getenv func(string) string) string {
 	}
 	if b := getenv(TernPaneEnv); b != "" {
 		return host.PaneRef{Kind: host.Tern, ID: b}.String()
+	}
+	if b := getenv(RexPaneEnv); b != "" {
+		return host.PaneRef{Kind: host.Rex, ID: b}.String()
 	}
 	return ""
 }

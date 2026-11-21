@@ -11,6 +11,9 @@ const (
 	// EngineTern is Tern, Stencil's multiplexing terminal, through its `tern` command line (node/hosttern.go,
 	// docs/integrations/engines.md "Tern").
 	EngineTern = "tern"
+	// EngineRex is Rex, a multiplexing terminal, through its `rex` command line and control API (node/hostrex.go,
+	// docs/integrations/engines.md "Rex").
+	EngineRex = "rex"
 	// EnginePaseo is not a terminal: the Paseo daemon's agents, through its runtime (node/runtimecontrol.go,
 	// docs/integrations/paseo.md). New sessions and sessions to continue go to Paseo.
 	EnginePaseo = "paseo"
@@ -30,6 +33,7 @@ var EngineNames = map[string]string{
 	EngineHerdrBoth: "herdr + Herdr App",
 	EngineOrca:      "Orca",
 	EngineTern:      "Tern",
+	EngineRex:       "Rex",
 	EnginePaseo:     "Paseo",
 	EngineCindy:     "Cindy",
 }

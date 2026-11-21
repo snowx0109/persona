@@ -6,11 +6,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertIsDisplayed
@@ -19,6 +21,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -161,6 +164,54 @@ class MachinesShotsTest {
 
     @Config(sdk = [35], qualifiers = "ja-w400dp-h5200dp-xhdpi", fontScale = 2f)
     @Test fun japaneseAgentsAtMaximumText() = agentShowAll("ja", "すべて表示（6件）", "折りたたむ")
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h2400dp-xhdpi")
+    @Test fun linkSwitchDetail() = linkSwitchDetail(1f)
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h2400dp-xhdpi", fontScale = 2f)
+    @Test fun linkSwitchDetailAtLargestText() = linkSwitchDetail(2f)
+
+    /** The real detail screen: its expected disconnect is not a new SSH error and offers no ordinary Reconnect. */
+    private fun linkSwitchDetail(fontScale: Float) {
+        val switching = lab.copy(online = false, error = "ssh: connection refused",
+            linkSwitch = MachineLinkSwitch(available = false, phase = "installing", at = "2026-11-20T10:00:00Z"))
+        val metrics = MachineMetrics("lab", false, lab.system, sample, points)
+        val switchApi = object : MachineMetricsApi {
+            override suspend fun dashboard() = MetricsDashboard(listOf(metrics), step = 10)
+            override suspend fun history(machineId: String, range: MetricRange) = MetricsHistory(metrics, range.wire, range.step)
+        }
+        val switchRepository = object : SessionsRepository {
+            override val machines = MutableStateFlow(listOf(switching))
+            override val sessions = MutableStateFlow(emptyList<Session>())
+            override suspend fun refresh() = Unit
+        }
+        val page = MachinesViewModel(switchApi, switchRepository, "lab") { now }
+        runBlocking { page.load(MetricRange.Hour) }
+        val actions = MachineActionsViewModel(management, switchRepository)
+        var dark by mutableStateOf(false)
+        rule.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
+                    Box(Modifier.testTag("link-switch-detail-shot").width(400.dp)
+                        .height(if (fontScale > 1f) 1800.dp else 1200.dp).background(PersonaTheme.palette.background)) {
+                        MachinesScreen("lab", page, navigator, actions)
+                    }
+                }
+            }
+        }
+        for (d in listOf(false, true)) {
+            rule.runOnIdle { dark = d }
+            rule.waitForIdle()
+            rule.onNodeWithText(rule.activity.getString(R.string.machines_link_switch_switching))
+                .performScrollTo().assertIsDisplayed()
+            rule.onNodeWithText("ssh: connection refused").assertDoesNotExist()
+            rule.onNodeWithText(rule.activity.getString(R.string.machines_reconnect)).assertDoesNotExist()
+            val bitmap = rule.onNodeWithTag("link-switch-detail-shot").captureToImage().asAndroidBitmap()
+            val size = if (fontScale > 1f) "large" else "default"
+            File(out(), "machines-detail-link-switch-glass-${if (d) "dark" else "light"}-$size.png")
+                .outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+    }
 
     private fun agentShowAll(language: String, showAll: String, showLess: String) {
         val repository = object : SessionsRepository {

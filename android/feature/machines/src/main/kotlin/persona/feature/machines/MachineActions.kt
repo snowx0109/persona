@@ -7,6 +7,7 @@ import persona.core.contracts.Machine
 import persona.core.contracts.api.AgentLauncher
 import persona.core.contracts.api.MachineManagement
 import persona.core.contracts.api.SessionsRepository
+import persona.core.contracts.api.hubCodedFailure
 import persona.core.designsystem.UiText
 import persona.core.designsystem.failureReasonText
 import kotlinx.coroutines.CancellationException
@@ -77,6 +78,8 @@ internal data class MachineActionsState(
     val moving: Boolean = false,
     /** Rename was sent and not answered yet. */
     val renaming: Boolean = false,
+    /** One confirmed SSH-to-Link start per computer, retained until the machine list resolves it. */
+    val linkSwitches: Map<String, LinkSwitchAttempt> = emptyMap(),
 )
 
 /**
@@ -87,6 +90,7 @@ internal class MachineActionsViewModel(
     private val management: MachineManagement,
     private val sessions: SessionsRepository,
     private val reconnectWaitMillis: Long = 15_000,
+    private val linkSwitchClock: () -> Long = { System.currentTimeMillis() },
 ) : ViewModel() {
     private val mutable = MutableStateFlow(MachineActionsState())
     val state = mutable.asStateFlow()
@@ -94,6 +98,7 @@ internal class MachineActionsViewModel(
     /** One notice per finished action, for the app's feedback. */
     val notices = noticeChannel.receiveAsFlow()
     private var launchersJob: Job? = null
+    private val observedLinkSwitches = mutableSetOf<String>()
 
     /** Again when it comes online (after "Reconnect"): an offline machine has no launchers to list. */
     fun loadLaunchers(machineId: String, online: Boolean) {
@@ -198,6 +203,147 @@ internal class MachineActionsViewModel(
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { noticeChannel.trySend(MachineNotice.MoveFailed(failureReasonText(error))) }
             finally { mutable.update { it.copy(moving = false) } }
+        }
+    }
+
+    /** Reconciles one computer's accepted start or warning with every authoritative machine-list update. */
+    fun observeLinkSwitch(machineId: String) {
+        if (!observedLinkSwitches.add(machineId)) return
+        viewModelScope.launch {
+            sessions.machines.collect { machines ->
+                reconcileLinkSwitch(machineId, machines.firstOrNull { it.id == machineId }?.linkSwitch)
+            }
+        }
+    }
+
+    private fun putLinkSwitch(machineId: String, change: (LinkSwitchAttempt?) -> LinkSwitchAttempt?) {
+        mutable.update { state ->
+            val attempts = state.linkSwitches.toMutableMap()
+            change(attempts[machineId])?.let { attempts[machineId] = it } ?: attempts.remove(machineId)
+            state.copy(linkSwitches = attempts.toMap())
+        }
+    }
+
+    private fun reconcileLinkSwitch(machineId: String, listed: persona.core.contracts.MachineLinkSwitch?) {
+        val now = linkSwitchClock()
+        putLinkSwitch(machineId) { attempt ->
+            attempt ?: return@putLinkSwitch null
+            if (attempt.starting) return@putLinkSwitch attempt
+            if (!linkSwitchAttemptLive(attempt, now)) return@putLinkSwitch null
+            // A changed cached/pushed row cannot turn a failed reconciliation into permission to start again.
+            if (attempt.refreshFailed) return@putLinkSwitch attempt
+            val accepted = attempt.accepted
+            if (accepted != null && listed != null && linkSwitchCaughtUp(listed, attempt)) return@putLinkSwitch null
+            if (accepted == null && attempt.notice != null && linkSwitchKey(listed) != attempt.seen) return@putLinkSwitch null
+            attempt
+        }
+    }
+
+    /**
+     * Starts once for this explicit confirmation. A refused or uncertain answer is read back through `machines`, never
+     * automatically posted again. A failed uncertain read leaves only Check status; after a successful one, another POST
+     * still needs a new explicit confirmation.
+     */
+    fun startLinkSwitch(machineId: String) {
+        observeLinkSwitch(machineId)
+        val listed = sessions.machines.value.firstOrNull { it.id == machineId }?.linkSwitch
+        val existing = state.value.linkSwitches[machineId]
+        if (!canStartLinkSwitch(listed, existing, linkSwitchClock())) return
+        val seen = linkSwitchKey(listed)
+        putLinkSwitch(machineId) { LinkSwitchAttempt(seen) }
+        viewModelScope.launch {
+            try {
+                val accepted = management.startLinkSwitch(machineId)
+                putLinkSwitch(machineId) { current ->
+                    current?.takeIf { it.starting && it.seen == seen }?.copy(
+                        starting = false, accepted = accepted, settledAt = linkSwitchClock())
+                }
+                reconcileLinkSwitch(machineId, sessions.machines.value.firstOrNull { it.id == machineId }?.linkSwitch)
+                return@launch
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                val coded = hubCodedFailure(error)
+                val status = coded?.status
+                val notice = when {
+                    status == 403 -> LinkSwitchNotice.Forbidden
+                    status == 409 || (status != null && status >= 400 && status < 500 && status != 408 && status != 429) ->
+                        LinkSwitchNotice.Refused(coded.code)
+                    else -> LinkSwitchNotice.Uncertain
+                }
+                putLinkSwitch(machineId) { current ->
+                    current?.takeIf { it.starting && it.seen == seen }?.copy(notice = notice)
+                }
+                if (notice is LinkSwitchNotice.Forbidden) {
+                    putLinkSwitch(machineId) { current ->
+                        current?.takeIf { it.seen == seen }?.copy(starting = false, settledAt = linkSwitchClock())
+                    }
+                    return@launch
+                }
+                var refreshFailed = false
+                try { sessions.refreshMachine(machineId) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { refreshFailed = true }
+                putLinkSwitch(machineId) { current ->
+                    current?.takeIf { it.starting && it.seen == seen && it.notice == notice }?.copy(
+                        starting = false, refreshFailed = refreshFailed, settledAt = linkSwitchClock())
+                }
+                reconcileLinkSwitch(machineId, sessions.machines.value.firstOrNull { it.id == machineId }?.linkSwitch)
+            } finally {
+                // A repository can cancel its own refresh without destroying this ViewModel. Never leave an
+                // unanswerable "Starting" card: an interrupted POST/read-back is uncertain and offers Check status.
+                putLinkSwitch(machineId) { current ->
+                    if (current == null || !current.starting || current.seen != seen) current
+                    else {
+                        val notice = current.notice ?: LinkSwitchNotice.Uncertain
+                        current.copy(starting = false, notice = notice,
+                            refreshFailed = notice is LinkSwitchNotice.Uncertain, settledAt = linkSwitchClock())
+                    }
+                }
+            }
+        }
+    }
+
+    /** A read-only recovery after an uncertain response or after an accepted operation outlives the hub's terminal window. */
+    fun checkLinkSwitch(machineId: String) {
+        val attempt = state.value.linkSwitches[machineId] ?: return
+        val stale = linkSwitchNeedsStatus(attempt, linkSwitchClock())
+        if (attempt.starting || attempt.notice !is LinkSwitchNotice.Uncertain && !stale ||
+            !attempt.refreshFailed && !stale) return
+        putLinkSwitch(machineId) { current ->
+            current?.copy(starting = true, refreshFailed = false, notice = current.notice ?: LinkSwitchNotice.Uncertain)
+        }
+        viewModelScope.launch {
+            var refreshFailed = false
+            var refreshed = false
+            try {
+                try {
+                    sessions.refreshMachine(machineId)
+                    refreshed = true
+                }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { refreshFailed = true }
+                putLinkSwitch(machineId) { current ->
+                    current?.takeIf { it.starting && it.seen == attempt.seen && it.notice is LinkSwitchNotice.Uncertain }?.copy(
+                        starting = false, refreshFailed = refreshFailed,
+                        // Keep an old accepted operation old: a failed read must not give it another hour of stale progress.
+                        settledAt = if (stale) current.settledAt else linkSwitchClock())
+                }
+                if (stale && refreshed) {
+                    // This successful owning-hub response, not a timer or a cached empty row, retires the old overlay.
+                    // The response's own running/terminal/eligible/absent state is now the only thing displayed.
+                    putLinkSwitch(machineId) { current ->
+                        current?.takeUnless { !it.starting && it.seen == attempt.seen && !it.refreshFailed }
+                    }
+                } else {
+                    reconcileLinkSwitch(machineId, sessions.machines.value.firstOrNull { it.id == machineId }?.linkSwitch)
+                }
+            } finally {
+                putLinkSwitch(machineId) { current ->
+                    if (current == null || !current.starting || current.seen != attempt.seen ||
+                        current.notice !is LinkSwitchNotice.Uncertain) current
+                    else current.copy(starting = false, refreshFailed = true, settledAt = current.settledAt)
+                }
+            }
         }
     }
 

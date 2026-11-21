@@ -526,6 +526,43 @@ func truncatedSnippet(s string) string {
 	return s + "…"
 }
 
+const (
+	pollFailBackoffFirst = 2 * time.Second
+	pollFailBackoffMax   = 30 * time.Second
+)
+
+// hostFailBackoff throttles repeated snapshot attempts for a host that is failing to answer (for example herdr on a
+// computer where it is not installed or not running). A watcher kick or a successful snapshot resets the host at once.
+type hostFailBackoff struct {
+	gap     map[string]time.Duration
+	retryAt map[string]time.Time
+}
+
+func newHostFailBackoff() *hostFailBackoff {
+	return &hostFailBackoff{gap: map[string]time.Duration{}, retryAt: map[string]time.Time{}}
+}
+
+func (b *hostFailBackoff) skip(kind string, now time.Time, kicked bool) bool {
+	if kicked {
+		delete(b.gap, kind)
+		delete(b.retryAt, kind)
+		return false
+	}
+	until, ok := b.retryAt[kind]
+	return ok && now.Before(until)
+}
+
+func (b *hostFailBackoff) record(kind string, failed bool, now time.Time) {
+	if !failed {
+		delete(b.gap, kind)
+		delete(b.retryAt, kind)
+		return
+	}
+	next := min(max(2*b.gap[kind], pollFailBackoffFirst), pollFailBackoffMax)
+	b.gap[kind] = next
+	b.retryAt[kind] = now.Add(next)
+}
+
 // pollAgents refreshes the hosts' state every second (only the ones due) and pushes sessions.changed when anything
 // visible changes. Each watcher host is snapshotted on its own stream's changes and at most every slowSnapshot while
 // its stream is live, independently of the other hosts (the combined engine): a herdr-core event never snapshots
@@ -534,6 +571,7 @@ func (n *Node) pollAgents(ctx context.Context) {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	last := map[string]time.Time{} // host kind → its last snapshot
+	backoff := newHostFailBackoff()
 	var listed time.Time
 	for {
 		sigs := n.signalSnapshot()
@@ -541,8 +579,12 @@ func (n *Node) pollAgents(ctx context.Context) {
 		if !ok {
 			return
 		}
+		now := time.Now()
 		var due []host.Host
 		for _, h := range n.hosts.All() {
+			if backoff.skip(h.Kind(), now, kicked[h.Kind()]) {
+				continue
+			}
 			if n.hostDue(h.Kind(), last[h.Kind()], kicked[h.Kind()]) {
 				due = append(due, h)
 			}
@@ -551,10 +593,11 @@ func (n *Node) pollAgents(ctx context.Context) {
 		// running) does not stop the list: runtimes, the assistant and the transcripts do not need it. Its agents stay
 		// as last seen (refreshHosts).
 		if len(due) > 0 {
-			_ = n.refreshHosts(ctx, due...)
-			now := time.Now()
+			failed, _ := n.refreshHostsWithFailures(ctx, due...)
+			now = time.Now()
 			for _, h := range due {
 				last[h.Kind()] = now
+				backoff.record(h.Kind(), failed[h.Kind()], now)
 			}
 		}
 		list := n.sessionList(ctx, false)

@@ -51,7 +51,8 @@ The room, its guards and the tape's format: docs/apple/recording.md "A meeting's
 ## What is recorded (iOS)
 
 Only numbers and words the app's code chose. Kept at most 24 hours of events, 14 days of MetricKit payloads, 7 days of
-errors and 50 MB in all, the oldest dropped first (`DevStore`, `Application Support/dev-mode`, out of backups).
+errors, 8 weeks of the connection tally and 50 MB in all, the oldest dropped first (`DevStore`, `Application Support/dev-mode`,
+out of backups).
 
 - **Events** (`events.jsonl`, one JSON object a line, `t` in UTC and `kind`):
   - `minute`: one a minute while the app is in front, one for each stretch in the background. The app process's CPU
@@ -69,6 +70,8 @@ errors and 50 MB in all, the oldest dropped first (`DevStore`, `Application Supp
   exceptions) as delivered, plus `pastPayloads` / `pastDiagnosticPayloads` when the switch is turned on.
 - **Log** (`log.txt`): this launch's own `Logger` lines (subsystem `persona`), read from `OSLogStore` at export; iOS
   keeps no earlier launch's log for the app.
+- **Connection tally** (`connections.json`, #11390): per week, how often the app was opened and never reached the hub, and
+  why, and how it reached it when it did. Below, "Connection tally (iOS)".
 
 Screens are named by the code: the tab (`assistant`, `agents`, `inbox`, `settings`, `feishu`) or a screen opened over it
 with `.devScreen(…)` (`chat`, `assistant-chat`, `screen`, `knowledge`).
@@ -76,6 +79,58 @@ with `.devScreen(…)` (`chat`, `assistant-chat`, `screen`, `knowledge`).
 **Cost while on**: no timer in the background; in front one wakeup a minute rolls the summary. Counters live in memory
 behind a lock and lines are appended in batches on a utility queue (crash reports are written at once). While off, the
 hooks (`DevProbe`, `HubRedirects.finished`) are nil checks.
+
+## Connection tally (iOS)
+
+**Who it serves**: people developing or testing how Persona reaches the hub. The hub can't see connections that never
+reach it, so only the phone can count how often it fails to; any later change to how the iPhone trusts the hub needs this
+as its baseline (#11390). It is recorded only while the switch is on, like everything above; whether it may run with the
+switch off is asked in #11400 and not done.
+
+- **An open** is one period with the app in front, per hub group (Demo Mode left out), from the moment the phone has a
+  network path; it ends when the app leaves the front. Tries made while the phone has no network path are left out (they
+  say nothing about the hub), and so are the tries of an attempt that began before the period (the app left the front
+  and came back while it ran, or a silent push woke the socket in the background and its attempt ends after the app is
+  opened). An open whose socket is already connected when it begins (it came up in the background for a silent push and
+  is still up) counts as connected. A period already under way when the switch is turned on is not counted (what
+  happened before is not known): counting starts with the next one, or at launch with the switch on.
+- **A week** is an ISO week in UTC (`2026-W47`, starting Monday 00:00 UTC). An open counts in the week it began.
+- **What decides an open**: what the group's tries came to while it lasted, from the attempts the app makes anyway (the
+  route picker's probes, the race that restores an SSH tunnel used last time, a tunnel's check of the direct way, the
+  recheck of preferred addresses, and for a group with one address and no tunnel its socket); no probe, timer or polling
+  is added. A pick that a newer attempt replaced still counts what its probes came to before it ended; one that ended
+  because the app left the front usually reports after the period is over, so the tally leaves it out (Connection
+  Details still shows it). The outcomes are those of Connection Details (`docs/operations/network.md`, "Client-added
+  candidates": Answers, Certificate not trusted, Not your hub, Couldn't connect, Unknown).
+
+`connections.json` holds `format` (`persona-connection-tally`), `version` (1) and `weeks`, oldest first; per week:
+
+| Number | What it counts |
+| --- | --- |
+| `week`, `starts` | The ISO week (`2026-W47`) and its Monday (`2026-11-16`), UTC. |
+| `recorded_seconds` | Seconds the app was in front that week with the switch on, counted from the start of a period in front. 0 or no week at all: nothing was recorded then, not "no failures". |
+| `not_connected.not_your_hub` | Opens whose socket never connected and where an added address answered as another hub (on a private address only when every address tried was private). |
+| `not_connected.certificate_not_trusted` | Opens that never connected, where no address said Not your hub and one failed the system's trust. |
+| `not_connected.couldnt_connect` | Opens that never connected, where the most telling outcome was Couldn't connect (refused, timed out, not found, lost, not a healthy hub answer). |
+| `not_connected.unknown` | Opens that never connected with nothing more telling: tries cut short, or the period ended before any try failed (a probe that answered while the socket had not connected yet counts here). |
+| `connected[]` | Opens whose socket connected, one entry per way, counted once by the first connect of the open; `opens` is how many. |
+| `connected[].trust` | What vouched for the connection: `system` (HTTPS straight to the address in use, checked against the system's trust), `plain_http` (plain HTTP straight to it), or `tunnel` (through an SSH tunnel, the in-app tunnel or a local proxy, whose loopback end the socket reaches in plain HTTP: no TLS to the hub is checked by the app). |
+| `connected[].access_token` | The address in use carries its own Cloudflare Access service token (`ServerConfig.access`). |
+| `connected[].route` | `direct`, `ssh_tunnel`, `in_app_tunnel` or `local_proxy`: how the socket went. |
+| `connected[].address` | `paired`, `added` (Settings › hub › Addresses) or `mesh` (only the group's hellos listed it). |
+| `connected[].hello_fingerprint` | The hub's hello lists a key fingerprint for itself (`mesh.hubs[].fp`), yes or no. |
+
+What "most telling" means: Not your hub, then Certificate not trusted, then Couldn't connect, then Unknown. Whether the
+hub machine itself was down is not told apart (that needs a hub-side field).
+
+- **Kept** in `Application Support/dev-mode/connections.json`: this week and the seven before it, written off the main
+  actor on the recorder's queue when a period in front ends (the period during an export is in the next one), never in
+  `UserDefaults`. A period that ends with the app still in front (it crashed or was killed) is never written. Turning
+  the switch off deletes it with the rest.
+- **Never in it**: an address, host name, port, hub id, fingerprint or the group's own id; only fixed words, yes / no and
+  counts (`ConnectionTallyTests`).
+- **Cost**: while off, `DevProbe.listening` is checked and nothing is worked out. While on, a few counters behind the
+  recorder's lock and one small file write per period in front.
 
 ## What is recorded (web and the desktop app)
 
@@ -162,14 +217,18 @@ events.jsonl       the timeline above
 errors.jsonl       error reports, in the hub's error report format
 metrickit/*.json   MetricKit payloads as delivered (strings scrubbed, identifiers kept)
 log.txt            this launch's log lines
+connections.json   iOS: the connection tally, with the logs, when something was counted
 ```
+
+The connection tally (#11390) adds a file and a count (`counts.connection_weeks`, on iOS) and changes nothing a reader
+already relied on, so the package stays `version` 1: a reader that does not know the file leaves it alone.
 
 On iOS, `commit` is the app's `PersonaCommit`, which only a Release build (every TestFlight build) is stamped with: a
 Debug build's package has an empty `commit` unless it was built with `PERSONA_STAMP_COMMIT=YES`
 (`docs/operations/testing.md`, "Development builds").
 
-The export page lists four categories; the first three can be left out: **Logs** (`log.txt` and the event kinds
-other than the energy ones), **Errors and Crashes** (`errors.jsonl`, `metrickit/diagnostics-*`), **Energy and
+The export page lists four categories; the first three can be left out: **Logs** (`log.txt`, the event kinds
+other than the energy ones and, on iOS, `connections.json`, beside the socket's own lines), **Errors and Crashes** (`errors.jsonl`, `metrickit/diagnostics-*`), **Energy and
 Performance** (`minute`, `foreground`, `thermal`, `power`, `battery`, `path`, `metrickit/metrics-*`), and **Device and App
 Version** (`manifest.json`, `README.md`, always).
 
@@ -207,11 +266,12 @@ not one of the API's words is `:id`. `DevModeTests` keeps the Swift list equal t
 ## Code (iOS)
 
 `apple/Persona/DevMode/`: `DevMode` (the switch, lifecycle, device observers, the minute roll), `DevRecorder` (counting
-and lines), `DevStore` (files, limits), `DevMetrics` (MetricKit), `DevPackage` (the zip), `DevScrub`, `DevModeViews`
+and lines), `DevConnections` (the connection tally: its opens and weeks), `DevStore` (files, limits), `DevMetrics`
+(MetricKit), `DevPackage` (the zip), `DevScrub`, `DevModeViews`
 (About's group, Export Diagnostics), `DevSend` (Send To and the hand-off to a chat's box), `MeetingTapesPage` (Replay a
 Meeting Tape; the tapes are `MeetingTapeLibrary`, the player `MeetingReplay` in `apple/Persona/Recording/`). Shared code reports through `apple/Shared/DevProbe.swift`; requests through
 `HubRedirects.finished` in PersonaWire. DEBUG: `-openAbout YES` opens About, `-openAbout export` its export page.
-Tests: `apple/PersonaTests/DevModeTests.swift`.
+Tests: `apple/PersonaTests/DevModeTests.swift`, `apple/PersonaTests/ConnectionTallyTests.swift`.
 
 ## Code (web)
 

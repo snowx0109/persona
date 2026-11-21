@@ -18,6 +18,11 @@ annotation class WireEnum(vararg val values: String)
 @Target(AnnotationTarget.PROPERTY)
 annotation class WireTime(val unixSeconds: Boolean = false)
 
+/** An optional field whose malformed value is safety-critical and must not be replaced by its default. */
+@SerialInfo
+@Target(AnnotationTarget.PROPERTY)
+annotation class WireStrict
+
 /** Apply D5 at field boundaries; a malformed optional field must not discard its siblings. */
 abstract class WireSerializer<T>(private val generated: KSerializer<T>) : KSerializer<T> {
     override val descriptor: SerialDescriptor get() = generated.descriptor
@@ -67,7 +72,8 @@ private fun clean(value: JsonElement, descriptor: SerialDescriptor): JsonElement
                         if (cleaned == JsonNull && !child.isNullable && descriptor.isElementOptional(index)) continue
                         put(name, cleaned)
                     } catch (error: SerializationException) {
-                        if (!descriptor.isElementOptional(index)) throw error
+                        val strict = descriptor.getElementAnnotations(index).any { it is WireStrict }
+                        if (!descriptor.isElementOptional(index) || strict) throw error
                     }
                 }
                 for (index in 0 until descriptor.elementsCount) {

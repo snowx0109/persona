@@ -4,8 +4,9 @@ import PersonaWire
 
 /// Where Developing Persona keeps what it recorded (#9460): `Application Support/dev-mode`, out of backups. Events go
 /// into one file an hour (`events/2026-11-17T10.jsonl`, UTC), so the oldest go whole; errors into `errors.jsonl`;
-/// MetricKit's payloads into `metrickit/` as delivered. Kept at most 24 hours of events, 14 days of MetricKit, 7 days
-/// of errors, and 50 MB in all, the oldest dropped first.
+/// MetricKit's payloads into `metrickit/` as delivered; the connection tally into `connections.json` (#11390). Kept at
+/// most 24 hours of events, 14 days of MetricKit, 7 days of errors, 8 weeks of the tally, and 50 MB in all, the oldest
+/// dropped first.
 nonisolated final class DevStore: @unchecked Sendable {
     static let defaultMaxBytes: Int64 = 50 << 20
     static let eventAge: TimeInterval = 24 * 3600
@@ -28,6 +29,7 @@ nonisolated final class DevStore: @unchecked Sendable {
     var events: URL { directory.appending(path: "events", directoryHint: .isDirectory) }
     var metrics: URL { directory.appending(path: "metrickit", directoryHint: .isDirectory) }
     var errors: URL { directory.appending(path: "errors.jsonl") }
+    var connections: URL { directory.appending(path: "connections.json") }
 
     // MARK: Writing
 
@@ -56,6 +58,20 @@ nonisolated final class DevStore: @unchecked Sendable {
         }
     }
 
+    /// Adds a period's opens to the connection tally and keeps its last `ConnectionTally.keptWeeks` weeks. On the
+    /// recorder's queue, never the main actor.
+    func addConnections(_ delta: ConnectionTally, now: Date) {
+        lock.withLock {
+            var tally = (try? Data(contentsOf: connections)).flatMap(ConnectionTally.decoded) ?? ConnectionTally()
+            tally.merge(delta)
+            tally.trim(now: now)
+            guard let data = tally.encoded() else { return }
+            try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            try? data.write(to: connections, options: .atomic)
+            excludeFromBackup()
+        }
+    }
+
     /// Everything recorded goes (the switch was turned off).
     func clear() {
         lock.withLock { _ = try? fm.removeItem(at: directory) }
@@ -75,6 +91,15 @@ nonisolated final class DevStore: @unchecked Sendable {
 
     func metricFiles() -> [URL] {
         lock.withLock { recordFiles(under: metrics).map(\.url).sorted { $0.lastPathComponent < $1.lastPathComponent } }
+    }
+
+    /// The connection tally's weeks still kept at `now`; empty when nothing was counted.
+    func connectionTally(now: Date) -> ConnectionTally {
+        lock.withLock {
+            var tally = (try? Data(contentsOf: connections)).flatMap(ConnectionTally.decoded) ?? ConnectionTally()
+            tally.trim(now: now)
+            return tally
+        }
     }
 
     /// The kept error lines younger than `errorAge`, oldest first.
@@ -141,16 +166,20 @@ nonisolated final class DevStore: @unchecked Sendable {
         try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if !fm.fileExists(atPath: url.path(percentEncoded: false)) {
             try? data.write(to: url)
-            var dir = directory
-            var values = URLResourceValues()
-            values.isExcludedFromBackup = true
-            try? dir.setResourceValues(values)
+            excludeFromBackup()
             return
         }
         guard let handle = try? FileHandle(forWritingTo: url) else { return }
         defer { try? handle.close() }
         _ = try? handle.seekToEnd()
         try? handle.write(contentsOf: data)
+    }
+
+    private func excludeFromBackup() {
+        var dir = directory
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? dir.setResourceValues(values)
     }
 
     // MARK: Names

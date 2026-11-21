@@ -127,6 +127,7 @@ func TestEngineHostsForSets(t *testing.T) {
 		{[]string{"orca", "herdr"}, []string{host.Herdr, host.Orca}},
 		{[]string{"herdr", "herdr-core", "orca", "paseo", "cindy"}, []string{host.Herdr, host.HerdrCore, host.Orca}},
 		{[]string{"tern", "paseo", "herdr"}, []string{host.Herdr, host.Tern}},
+		{[]string{"rex", "tern", "paseo"}, []string{host.Tern, host.Rex}},
 		{[]string{"paseo"}, nil},
 		{[]string{"cindy"}, nil},
 		{[]string{}, nil},

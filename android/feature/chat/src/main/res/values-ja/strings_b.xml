@@ -69,9 +69,11 @@
     <string name="chat_chrome_notice_dismiss">閉じる</string>
     <string name="chat_chrome_rename_text">タブ名はherdrに同期されます。セッション名はClaudeの/renameを使うので、Macのclaude --resumeでも表示されます。</string>
     <string name="chat_chrome_rename_text_tern">タブ名はTernに同期されます。セッション名はClaudeの/renameを使うので、Macのclaude --resumeでも表示されます。</string>
+    <string name="chat_chrome_rename_text_rex">タブ名はRexに同期されます。セッション名はClaudeの/renameを使うので、Macのclaude --resumeでも表示されます。</string>
     <string name="chat_chrome_save">保存</string>
     <string name="chat_chrome_tab_name">タブ名（herdr tab）</string>
     <string name="chat_chrome_tab_name_tern">タブ名（Tern tab）</string>
+    <string name="chat_chrome_tab_name_rex">タブ名（Rex tab）</string>
     <string name="chat_chrome_session_name">セッション名</string>
     <string name="chat_chrome_delete">削除</string>
     <string name="chat_chrome_peers_title">同じスペースのエージェント</string>

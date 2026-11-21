@@ -255,6 +255,7 @@
     <string name="designsystem_core_engine_herdr_app">Terminals opened in the desktop app</string>
     <string name="designsystem_core_engine_orca">Terminals in Orca</string>
     <string name="designsystem_core_engine_tern">Terminals in Tern</string>
+    <string name="designsystem_core_engine_rex">Terminals in Rex</string>
     <string name="designsystem_core_engine_paseo">Agents in Paseo</string>
     <string name="designsystem_core_engine_cindy">Agents in Cindy</string>
     <string name="designsystem_core_engine_none">No terminal engine</string>

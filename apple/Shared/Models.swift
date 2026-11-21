@@ -32,6 +32,8 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var canDeploy: Bool? = nil
     var deployReason: String? = nil
     var deployPhase: String? = nil
+    /// Switching this SSH computer to Persona Link (#10662); nil from older hubs and managers.
+    var linkSwitch: MachineLinkSwitch? = nil
     /// OS and hardware (docs/server/machines.md); nil from hubs before machine monitoring, or a machine never connected.
     var system: MachineSystem?
     var engine: MachineEngine = .herdr
@@ -77,6 +79,7 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
         case sshHost = "ssh_host", herdrVersion = "herdr_version", claudeVersion = "claude_version", lastSeen = "last_seen"
         case nodeMismatch = "node_mismatch", nodeVersion = "node_version", deploying, deployError = "deploy_error"
         case canDeploy = "can_deploy", deployReason = "deploy_reason", deployPhase = "deploy_phase"
+        case linkSwitch = "link_switch"
         case hubID = "hub_id", hubName = "hub_name", machineUID = "machine_uid", hubGroup = "app_hub_group",
              groupLabel = "app_group_label"
     }
@@ -87,6 +90,32 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
         case "desktop": Theme.Icon.machine
         default: Theme.Icon.laptop
         }
+    }
+}
+
+/// An SSH computer's eligibility for, or progress through, the hub-owned switch to Persona Link (#10662).
+/// `phase` and the reason/error codes stay as wire words so newer hubs remain decodable; clients localize them.
+nonisolated struct MachineLinkSwitch: Codable, Hashable, Sendable {
+    var available: Bool
+    var reason: String?
+    var phase: String?
+    var error: String?
+    var rollbackUnconfirmed: Bool?
+    var at: Date?
+
+    init(available: Bool, reason: String? = nil, phase: String? = nil, error: String? = nil,
+         rollbackUnconfirmed: Bool? = nil, at: Date? = nil) {
+        self.available = available
+        self.reason = reason
+        self.phase = phase
+        self.error = error
+        self.rollbackUnconfirmed = rollbackUnconfirmed
+        self.at = at
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case available, reason, phase, error, at
+        case rollbackUnconfirmed = "rollback_unconfirmed"
     }
 }
 
@@ -115,6 +144,7 @@ extension Machine {
         canDeploy = try c.decodeIfPresent(Bool.self, forKey: .canDeploy)
         deployReason = try c.decodeIfPresent(String.self, forKey: .deployReason)
         deployPhase = try c.decodeIfPresent(String.self, forKey: .deployPhase)
+        linkSwitch = try? c.decodeIfPresent(MachineLinkSwitch.self, forKey: .linkSwitch)
         system = try c.decodeIfPresent(MachineSystem.self, forKey: .system)
         engine = try c.decodeIfPresent(MachineEngine.self, forKey: .engine) ?? .herdr
         engines = try c.decodeIfPresent([DetectedEngine].self, forKey: .engines) ?? []
@@ -178,6 +208,13 @@ nonisolated extension Machine {
     var neverConnected: Bool {
         !online && (errorCode == "never_connected" || (isPending && (lastSeen?.timeIntervalSince1970 ?? 0) <= 0))
     }
+    /// Its disconnect is expected while the hub moves it from SSH to Persona Link, not a new connection failure.
+    var linkSwitchRunning: Bool {
+        switch linkSwitch?.phase {
+        case "checking", "installing", "connecting", "rolling_back": true
+        default: false
+        }
+    }
 }
 
 /// A machine across groups of hubs (docs/protocol/multi-hub.md): its group and the id its hub gives it.
@@ -213,6 +250,9 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     /// Tern's terminals (docs/integrations/engines.md): its sessions are spaces, its tabs slots, its blocks panes
     /// (`tern:<block id>`).
     static let tern = Self(rawValue: "tern")
+    /// Rex's terminals (docs/integrations/engines.md): its sessions are spaces, its windows slots, its blocks panes
+    /// (`rex:<block id>`).
+    static let rex = Self(rawValue: "rex")
     /// Paseo's agents (docs/integrations/paseo.md): no terminal; the node runs a bridge to the Paseo daemon.
     static let paseo = Self(rawValue: "paseo")
     /// Cindy's agents (docs/integrations/engines.md): no terminal; the node runs a bridge to Cindy.
@@ -220,7 +260,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     /// No terminal engine: the empty host set (docs/integrations/engines.md "Host sets"), for a computer whose sessions
     /// are only the desktop apps' (#3302). Not a hub engine id: saved as `{"hosts": []}`, and not in `allCases`.
     static let noEngine = Self(rawValue: "none")
-    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .tern, .paseo, .cindy]
+    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .tern, .rex, .paseo, .cindy]
     var id: String { rawValue }
     var name: String {
         switch self {
@@ -229,6 +269,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrBoth: "herdr + Herdr App"
         case .orca: "Orca"
         case .tern: "Tern"
+        case .rex: "Rex"
         case .paseo: "Paseo"
         case .cindy: "Cindy"
         case .noEngine: String(localized: "No Terminal Engine")
@@ -242,6 +283,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrBoth: String(localized: "Sessions from both the terminal and the desktop app")
         case .orca: String(localized: "Terminals in Orca")
         case .tern: String(localized: "Terminals in Tern")
+        case .rex: String(localized: "Terminals in Rex")
         case .paseo: String(localized: "Agents in Paseo")
         case .cindy: String(localized: "Agents in Cindy")
         case .noEngine: String(localized: "Sessions of the desktop apps only")
@@ -1451,15 +1493,15 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var hostKind: String? {
         guard let paneID, !paneID.isEmpty else { return nil }
         let kind = paneID.firstIndex(of: ":").map { String(paneID[..<$0]) } ?? ""
-        return ["orca", "herdr-core", "botmux", "tern"].contains(kind) ? kind : "herdr"
+        return ["orca", "herdr-core", "botmux", "tern", "rex"].contains(kind) ? kind : "herdr"
     }
 
-    /// Where it was opened (#2526): a botmux session is a Feishu group's topic, a herdr or Tern pane a terminal; nil
+    /// Where it was opened (#2526): a botmux session is a Feishu group's topic, a herdr, Tern or Rex pane a terminal; nil
     /// for the rest (Orca, runtimes, apps), which carry no source label.
     var source: SessionSource? {
         switch hostKind {
         case "botmux": .feishu
-        case "herdr", "herdr-core", "tern": .terminal
+        case "herdr", "herdr-core", "tern", "rex": .terminal
         default: nil
         }
     }

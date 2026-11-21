@@ -240,15 +240,17 @@ deactivated with no word of why, or not given back after the system resumed the 
 the call's (`audioActive`). `held` is "any hold reason".
 
 - **Start (outgoing).** `StartConversationAction` → fulfil, phase `connecting`, report the call's members and then
-  `startedConnecting`, begin the engine (the voice starts), start the activation watchdog. The members update (#9887) is
-  `conversationUpdated(Update(localMember: owner, members: [the call's handle], activeRemoteMembers: [the call's handle],
-  capabilities: [.pausing]))`, the owner being the incoming calls' local member: without a remote member the system has
-  nobody to write into Recents (an incoming call names its member as it is reported). Reports wait until the system
+  `startedConnecting`, begin the engine (the voice starts), start the activation watchdog. The members update (#9887,
+  `LCKCallSystem.outgoingMembers`) is `conversationUpdated(Update(localMember: owner, members: [the call's handle],
+  activeRemoteMembers: …, capabilities: [.pausing]))`, the owner being the incoming calls' local member: without a
+  remote member the system has nobody to write into Recents (an incoming call names its member as it is reported).
+  Apple's `members` are the remote participants, "including invited, but inactive" ones, so the owner is never among
+  them, and the call's handle counts as active only once the conversation is `joined` (or `paused`); before that
+  `activeRemoteMembers` is empty: the assistant is invited, not on the call (#12341). Reports wait until the system
   knows the conversation (LiveCommunicationKit lists an outgoing conversation only once its Start is fulfilled: checked
   right after the fulfil, else on the next `conversationChanged`), in the order they were made: the system drops
-  reports made before. When the conversation state reaches `joined` the members are reported again (#10495):
-  LiveCommunicationKit discards `conversationUpdated` while the conversation is `idle`, and the first report is sent in
-  that window; the second one, in `joined`, is the one the system persists for Recents.
+  reports made before. The first `conversationChanged` that says `joined` reports the members once more, now with the
+  handle active (#10495); later `joined` callbacks (one can follow the update itself) report nothing again.
   The system giving up on the Start ends the call as failed.
 - **Connected.** A call to Persona connects on the voice's first `ready` (report `connected`); an urgent call on Join.
 - **Audio.** The engine's audio starts only on `didActivate`. `didDeactivate` stops it and never ends the call; outside
@@ -279,7 +281,12 @@ the call's (`audioActive`). `held` is "any hold reason".
 - **Our own second call.** When any of our calls ends, every other call the system held is unpaused by the app (the
   system does not resume a held call of the same app): an urgent call answered with Hold & Accept, then over, gives the
   call to Persona back.
-- **End.** `EndConversationAction` → fulfil, end the engine (`VoiceCalls.end(.user, from: .call)`). The engine ending
+- **End.** `EndConversationAction` → end the engine (`VoiceCalls.end(.user, from: .call)`: the socket, the microphone
+  and the player stop), then fulfil (#12341). The action "removes the local participant from a conversation and stops
+  all audio and video streams", and `fulfill(dateEnded:)` says the conversation "was successfully ended for the local
+  member", so the streams stop before it is said, as Apple's CallKit sample (Speakerbox) stops its audio before it
+  fulfils `CXEndCallAction`. Before #12341 the fulfil came first and the voice-processing engine went on for about
+  200 ms on the main actor after it, while the system tore the call down. The engine ending
   by itself reports `conversationEnded`: `failed` for failures (`VoiceEnd.failsCall`), `remoteEnded` otherwise. The page's
   Hang Up goes through the system, ending here if it refuses. A conversation that left without an End action, or a
   manager reset, ends the call without a report. Each side ends exactly once. An ended call stays in the list 2 s so the
@@ -427,8 +434,11 @@ fails on a new one until it is given one):
 ## Recents and intents
 
 The system writes a call into the Phone app's Recents when it ends, for its members: an outgoing call reports them once
-the system has its conversation (the members update above) and again when the conversation joins (#10495: the system
-discards updates while `idle`), and its end goes through `EndConversationAction` or a `conversationEnded` report.
+the system has its conversation (the members update above) and again, the handle active, when the conversation joins
+(#10495), and its end goes through `EndConversationAction` or a `conversationEnded` report. That the system discards
+updates while `idle` (#10495's reading) is not something Apple documents: whether it keeps them shows only on a device,
+in the call log's `local member` while the call is on (below). `local member none` on the final `left` line proves
+nothing either way: End "removes the local participant from a conversation" by definition (#12341).
 The app declares `NSUserActivityTypes` `INStartCallIntent` and `INStartAudioCallIntent`
 (`apple/project.yml`): Recents may hand either. A redial reaches `PersonaCalls.continueActivity` from the scene's delegate (cold launch:
 `connectionOptions.userActivities`; warm: `scene(_:continue:)`) or SwiftUI's `onContinueUserActivity`, whichever
@@ -442,12 +452,23 @@ own name only by its length): Start requested (the conversation id, the handle's
 received, Start fulfilled and whether the system had the conversation then, the system having it (right after the
 fulfil, on `conversationChanged`, as it rang), every report sent (with the conversation's state), queued until the
 system has the conversation, or dropped, connected (the voice's first ready), the end (by which event, and whether
-`conversationEnded` was reported) and the conversation's state on every `conversationChanged`. The members update and
-the final `left` start with `recents:`, so `log stream --predicate 'subsystem == "persona" AND category == "call"'` (or
+`conversationEnded` was reported) and the conversation's state on every `conversationChanged`, each with whether the
+system's conversation has a local member (`local member set` / `none`). The members update, the final `left` and the
+End's two snapshots start with `recents:`, so `log stream --predicate 'subsystem == "persona" AND category == "call"'` (or
 Console, or Developing Persona's Export Diagnostics, whose `log.txt` keeps this launch's lines) shows whether the system
 had the members and saw the conversation leave. The members are reported twice (#10495): once when the system first has
-the conversation (usually `idle`), once when it joins; `the conversation joined` on the second `recents: members
-reported` line confirms the system accepted the update.
+the conversation (usually `idle`, the handle `invited`), once when it joins (`active`); each line also says whether the
+system's conversation had a local member before that update. `local member set` on a later line (`the system's
+conversation is joined (local member set)`, or the End's `before End` snapshot) is what says the system kept an update.
+
+An End the system asks for (the system's call UI, AirPods, or the page's Hang Up through the system) writes, in order
+(#12341): `the system asks end`; `recents: … before End, manager list: <state>, local member: <set|none>` (the
+conversation as the system's list has it, read before anything stops); `ended (…hungUp…)` and `the end, by endAction`;
+`End fulfilled` (after the engine stopped); the `left` callback; `the system deactivated the audio session`; and a
+second after the fulfil `recents: … after End, manager list: <state|absent>, local member: <…|n/a>`. `absent` there means
+the system has dropped the conversation from the app's manager; `left` (still listed) a second after the End is the
+first thing to check when the system's call UI stays on screen. The snapshots only read the list: they never end or
+report anything.
 
 ## CarPlay
 
@@ -511,9 +532,11 @@ All are listed in `scripts/release/debug_switches.txt`; `release.sh` fails a Rel
   (the screen's states and layout), `CallPersonaIntentTests`, the `UrgentCall*Tests` suites, `VoiceCallsTests`,
   `VoiceConversationTests` (`.call`, hold frames, `surface`), `LocalProxyRouteTests` and the CarPlay suites;
   `CallRecentsTests` (#9887: the outgoing call's members update before `startedConnecting` once the system has the
-  conversation, re-reported when the conversation joins (#10495), the incoming path unchanged for both the initial
-  report and the joined re-report, Developing Persona's Call handle picking the kind, both kinds in the configuration,
-  the log's steps); `CallFollowUpTests` (the assistant's name on the system call and the ring, the guards
+  conversation, re-reported once when the conversation joins (#10495) and not again on a later `joined` callback, the
+  members update's own roster: the owner local and never a member, the handle invited until `joined` or `paused` and
+  active then (#12341), the incoming path unchanged for both the initial report and the joined re-report, an End
+  fulfilled only after the engine stopped (#12341), Developing Persona's Call handle picking the kind, both kinds in
+  the configuration, the log's steps and the End's snapshots); `CallFollowUpTests` (the assistant's name on the system call and the ring, the guards
   following the live call, voice chat refused or asked, dictation and recordings refused, web media suspended, the call
   keeping its microphone, the assistant's look per state, the call's window, the bar's room, the template icon; and from
   the second review: a disconnect refused while the call talks through the hub, the call keeping the look and name it
@@ -548,10 +571,15 @@ All are listed in `scripts/release/debug_switches.txt`; `release.sh` fails a Rel
 ## Only a device shows
 
 - The system's call UI, the Lock Screen and Dynamic Island call, the Recents row and which activity type a redial
-  delivers. After hanging up an outgoing call, Recents shows a row with the assistant's name (or the conversation's) and
-  the app's icon, and tapping it calls the main conversation; the `recents:` lines say the members were reported (twice:
-  once while `idle`, once while `joined`; #10495) and the conversation left with `local member set`. With no row,
-  Developing Persona's Call Handle set to Email and a new call is the next check.
+  delivers. After hanging up an outgoing call in the app (#12341), the Dynamic Island's call goes at once (the system's
+  short "Call Ended" at most), with no swipe of the app and no restart; Recents shows a row with the assistant's name (or
+  the conversation's) and the app's icon, and tapping it calls the main conversation. The `recents:` lines say the
+  members were reported twice (`invited` while `idle`, `active` while `joined`; #10495), whether the system's
+  conversation had a local member while the call was on (`joined (local member set)`, `before End … local member: set`),
+  and a second after `End fulfilled`, `after End, manager list: absent` (`left` there, with the call UI still showing, is
+  the system keeping an ended conversation: report it with that line). `local member none` on the final `left` line is
+  expected. With no Recents row and `local member none` while the call was on, Developing Persona's Call Handle set to
+  Email and a new call is the next check.
 - When `didActivate` arrives for an outgoing call, and whether the 5 s watchdog ever fires.
 - The engine-start system mute and its 0.5 s window; Mute and hang-up from AirPods and from the system's call UI.
 - Hold & Accept with an urgent call; whether a cellular call arrives as a pause or as an interruption, and the resume.

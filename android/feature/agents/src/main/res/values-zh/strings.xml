@@ -256,11 +256,14 @@
     <string name="agents_dialog_rename_space">重命名空间</string>
     <string name="agents_dialog_rename_space_text">同时改 herdr 里这个 workspace 的名字。</string>
     <string name="agents_dialog_rename_space_text_tern">同时改 Tern 里这个 session 的名字。</string>
+    <string name="agents_dialog_rename_space_text_rex">同时改 Rex 里这个 session 的名字。</string>
     <string name="agents_dialog_rename_text">标签名同步到 herdr；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。</string>
     <string name="agents_dialog_rename_text_tern">标签名同步到 Tern；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。</string>
+    <string name="agents_dialog_rename_text_rex">标签名同步到 Rex；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。</string>
     <string name="agents_dialog_save">保存</string>
     <string name="agents_dialog_tab_name">标签名（herdr tab）</string>
     <string name="agents_dialog_tab_name_tern">标签名（Tern tab）</string>
+    <string name="agents_dialog_tab_name_rex">标签名（Rex tab）</string>
     <string name="agents_dialog_space_name">空间名</string>
     <string name="agents_dialog_session_name">会话名</string>
     <string name="agents_space_actions">空间操作</string>

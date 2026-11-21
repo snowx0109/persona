@@ -102,12 +102,29 @@ data class Machine(
     @SerialName("error_code") val errorCode: String? = null,
     /** The manager it belongs to (docs/assistant/managers.md「Ownership」); null from an older hub: the default manager. */
     @SerialName("manager") val manager: String? = null,
+    /** SSH to Persona Link eligibility or progress; absent on older hubs and when there is nothing to show. */
+    @WireStrict @SerialName("link_switch") val linkSwitch: MachineLinkSwitch? = null,
     /** The default for new sessions among [engineHosts]. Older hubs describe it with [engine]. */
     @SerialName("engine_default") val engineDefault: String? = null,
 ) {
     val displayName: String get() = name.ifEmpty { id }
     val pending: Boolean get() = trust == "pending"
 }
+
+/** `Machine.link_switch`: whether this computer can switch from SSH, or where that switch stands. */
+@KeepGeneratedSerializer
+@Serializable(with = MachineLinkSwitchSerializer::class)
+data class MachineLinkSwitch(
+    @SerialName("available") val available: Boolean,
+    @SerialName("reason") val reason: String? = null,
+    /** checking | installing | connecting | rolling_back | succeeded | failed. */
+    @SerialName("phase") val phase: String? = null,
+    /** A stable reason or failure code, never presented as raw text. */
+    @SerialName("error") val error: String? = null,
+    /** True means the hub could not prove the computer returned to SSH. */
+    @WireStrict @SerialName("rollback_unconfirmed") val rollbackUnconfirmed: Boolean = false,
+    @WireTime @SerialName("at") val at: String? = null,
+)
 
 /** `GET /api/v1/machines/{id}/browser` (and the machine's `browser`): ego lite there and how far its setup is. */
 @Serializable
@@ -1401,6 +1418,7 @@ data class DelegatedAnswer(val interaction: Interaction, val answers: Map<String
 data class Launcher(@SerialName("name") val name: String, @SerialName("base_url") val baseUrl: String? = null, @SerialName("model") val model: String? = null)
 
 object MachineSerializer : WireSerializer<Machine>(Machine.generatedSerializer())
+object MachineLinkSwitchSerializer : WireSerializer<MachineLinkSwitch>(MachineLinkSwitch.generatedSerializer())
 object ListeningPortSerializer : WireSerializer<ListeningPort>(ListeningPort.generatedSerializer())
 
 /** A port one of a session's processes listens on and answers HTTP at (`proto.Port`). */

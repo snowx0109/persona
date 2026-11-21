@@ -57,7 +57,7 @@ final class DevMode {
     func launch(tab: AppTab) {
         self.tab = Self.name(tab)
         guard isOn else { return }
-        begin(active: Self.inFront)
+        begin(active: Self.inFront, fresh: true)
     }
 
     func setOn(_ on: Bool) {
@@ -69,7 +69,7 @@ final class DevMode {
             since = now
             defaults.set(now, forKey: Self.sinceKey)
             size = nil
-            begin(active: Self.inFront)
+            begin(active: Self.inFront, fresh: false)
         } else {
             end()
             since = nil
@@ -147,12 +147,14 @@ final class DevMode {
 
     // MARK: Recording
 
-    private func begin(active: Bool) {
+    /// `fresh`: at launch, so the connection tally counts the period in front from its start (#11390); turned on by
+    /// hand, it starts with the next one.
+    private func begin(active: Bool, fresh: Bool) {
         let recorder = recorder
         #if os(iOS)
         UIDevice.current.isBatteryMonitoringEnabled = true
         #endif
-        recorder.start(active: active, page: current, device: device())
+        recorder.start(active: active, page: current, device: device(), fresh: fresh)
         DevProbe.install(recorder)
         HubRedirects.finished = { @Sendable task, metrics in recorder.request(task, metrics) }
         Task.detached(priority: .utility) { DevMetrics.shared.start() }

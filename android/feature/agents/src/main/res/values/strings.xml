@@ -276,11 +276,14 @@
     <string name="agents_dialog_rename_space">Rename space</string>
     <string name="agents_dialog_rename_space_text">This also renames the workspace in herdr.</string>
     <string name="agents_dialog_rename_space_text_tern">Also renames this session in Tern.</string>
+    <string name="agents_dialog_rename_space_text_rex">Also renames this session in Rex.</string>
     <string name="agents_dialog_rename_text">The tab name syncs to herdr; the session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
     <string name="agents_dialog_rename_text_tern">The tab name syncs to Tern; the session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
+    <string name="agents_dialog_rename_text_rex">The tab name syncs to Rex; the session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
     <string name="agents_dialog_save">Save</string>
     <string name="agents_dialog_tab_name">Tab name (herdr tab)</string>
     <string name="agents_dialog_tab_name_tern">Tab name (Tern tab)</string>
+    <string name="agents_dialog_tab_name_rex">Tab name (Rex tab)</string>
     <string name="agents_dialog_space_name">Space name</string>
     <string name="agents_dialog_session_name">Session name</string>
     <string name="agents_space_actions">Space actions</string>

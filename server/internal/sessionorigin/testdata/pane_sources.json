@@ -3,6 +3,7 @@
   {"name":"bare Herdr pane", "want":"terminal", "session":{"pane_id":"p7", "source_kind":"runtime"}},
   {"name":"Orca terminal", "want":"terminal", "session":{"pane_id":"orca:tab:leaf", "source_kind":"runtime", "source_instance_id":"pi"}},
   {"name":"Tern terminal", "want":"terminal", "session":{"pane_id":"tern:42"}},
+  {"name":"Rex terminal", "want":"terminal", "session":{"pane_id":"rex:block:00000000-0000-0000-0000-000000000001"}},
   {"name":"Herdr App terminal", "want":"terminal", "session":{"pane_id":"herdr-core:tab", "source_kind":"runtime"}},
   {"name":"unrecognized prefix is legacy Herdr", "want":"terminal", "session":{"pane_id":"custom:pane"}},
   {"name":"explicit Herdr spelling remains legacy", "want":"terminal", "session":{"pane_id":"herdr:w1:p2"}},

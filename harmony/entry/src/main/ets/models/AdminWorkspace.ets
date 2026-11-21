@@ -864,7 +864,7 @@ export class AdminWorkspace {
 
   engineOptions(): string[] {
     const reported = Wire.rows(this.machineData, 'engines').map((item: Record<string, Object>) => Wire.text(item, 'id')).filter((id: string) => !!id);
-    const options = reported.length ? reported : ['herdr', 'herdr-core', 'herdr-both', 'orca', 'tern', 'paseo', 'cindy'];
+    const options = reported.length ? reported : ['herdr', 'herdr-core', 'herdr-both', 'orca', 'tern', 'rex', 'paseo', 'cindy'];
     return this.engineSetsSupported() ? options.filter((id: string) => id !== 'herdr-both') : options;
   }
 
@@ -872,7 +872,7 @@ export class AdminWorkspace {
     const found = Wire.rows(this.machineData, 'engines').find((item: Record<string, Object>) => Wire.text(item, 'id') === id);
     if (found) return Wire.text(found, 'name', id);
     const names: Record<string, string> = { 'herdr': 'herdr', 'herdr-core': 'Herdr App', 'herdr-both': 'herdr + Herdr App',
-      'orca': 'Orca', 'tern': 'Tern', 'paseo': 'Paseo', 'cindy': 'Cindy', 'none': 'No terminal engine' };
+      'orca': 'Orca', 'tern': 'Tern', 'rex': 'Rex', 'paseo': 'Paseo', 'cindy': 'Cindy', 'none': 'No terminal engine' };
     return names[id] || id;
   }
 

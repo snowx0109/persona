@@ -633,8 +633,8 @@ nonisolated enum TabRename {
         var id: String { machine.path + "|" + host + "|" + tabID }
     }
 
-    /// The engines that rename tabs: herdr and Tern (the web's `canRenameIn`); Orca and the others are not asked.
-    static func canRename(host: String) -> Bool { host.isEmpty || host == "herdr" || host == "tern" }
+    /// The engines that rename tabs: herdr, Tern and Rex (the web's `canRenameIn`); Orca and the others are not asked.
+    static func canRename(host: String) -> Bool { host.isEmpty || host == "herdr" || host == "tern" || host == "rex" }
 
     /// A plain terminal's tab on an engine that renames; nil for an Agent's row (its own Rename Agent…) and a stopped
     /// Agent's leftover (titled by that Agent, not its tab).

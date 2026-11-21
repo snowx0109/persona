@@ -33,7 +33,7 @@ import PersonaWire
         #expect(!EngineSelectionModel.canSelect(future, on: m))
         m.engines = []
         #expect(!EngineSelectionModel.canSelect(future, on: m))
-        #expect(EngineSelectionModel.options(m).map(\.id) == ["herdr", "herdr-core", "herdr-both", "orca", "tern", "paseo", "cindy"])
+        #expect(EngineSelectionModel.options(m).map(\.id) == ["herdr", "herdr-core", "herdr-both", "orca", "tern", "rex", "paseo", "cindy"])
     }
 
     @Test func combinedEngineIsAKnownChoice() throws {
@@ -67,6 +67,20 @@ import PersonaWire
         #expect(m.engine == .tern && m.engineName == "Tern")
         #expect(EngineSelectionModel.initialChoice(m, pairing: true) == .tern)
         #expect(EngineSelectionModel.options(m).map(\.id) == ["herdr", "tern"], "the node's list as it reports it")
+        #expect(try JSON.decoder.decode(Machine.self, from: JSON.encoder.encode(m)) == m)
+    }
+
+    /// Rex (#12334): a terminal engine after Tern and before Paseo, chosen like the others, also offline.
+    @Test func rexIsAKnownChoice() throws {
+        let rex = MachineEngine.rex
+        #expect(rex.rawValue == "rex" && rex.name == "Rex")
+        #expect(rex.detail == "Rex 里的终端")
+        #expect(EngineSelectionModel.canSelect(rex, on: try machine()), "selectable offline, as the other engines")
+        #expect(MachineEngine.allCases.firstIndex(of: .rex) == MachineEngine.allCases.firstIndex(of: .tern).map { $0 + 1 })
+        let m = try machine(",\"engine\":\"rex\",\"engines\":[{\"id\":\"herdr\",\"name\":\"herdr\",\"available\":false},{\"id\":\"rex\",\"name\":\"Rex\",\"available\":true,\"version\":\"0.1.0-preview.21\"}]")
+        #expect(m.engine == .rex && m.engineName == "Rex")
+        #expect(EngineSelectionModel.initialChoice(m, pairing: true) == .rex)
+        #expect(EngineSelectionModel.options(m).map(\.id) == ["herdr", "rex"], "the node's list as it reports it")
         #expect(try JSON.decoder.decode(Machine.self, from: JSON.encoder.encode(m)) == m)
     }
 

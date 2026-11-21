@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/orcart"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rexcli"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/terncli"
 )
@@ -117,6 +118,10 @@ func engineHostsFor(c proto.EngineChoice, logf func(format string, args ...any))
 			tc := ternClient()
 			tc.Log = logf
 			hs = append(hs, newTernHost(tc))
+		case proto.EngineRex:
+			rc := rexClient()
+			rc.Log = logf
+			hs = append(hs, newRexHost(rc))
 		}
 	}
 	return hs
@@ -335,6 +340,7 @@ func (n *Node) engines(ctx context.Context, herdrVersion string) []proto.Engine 
 		{ID: proto.EngineHerdrBoth, Name: proto.EngineNames[proto.EngineHerdrBoth], Available: herdrAvailable && coreAvailable},
 		orcaEngine(ctx, orcaClient()),
 		ternEngine(ctx, ternClient()),
+		rexEngine(ctx, rexClient()),
 		n.paseoEngine(ctx),
 		n.cindyEngine(ctx),
 	}
@@ -352,6 +358,23 @@ func ternEngine(ctx context.Context, c *terncli.Client) proto.Engine {
 	}
 	e.Version = c.Version(ctx)
 	if _, err := c.Inspect(ctx, ""); err == nil {
+		e.Available = true
+	}
+	return e
+}
+
+// rexClient is the rex command line the Rex host drives and node.info asks; tests point it at a fake one.
+var rexClient = rexcli.New
+
+// rexEngine is Rex as found on this machine: available when its binary is there and its server answers
+// (`server.status` with --autostart=false); the version is the binary's, also while Rex is not running.
+func rexEngine(ctx context.Context, c *rexcli.Client) proto.Engine {
+	e := proto.Engine{ID: proto.EngineRex, Name: proto.EngineNames[proto.EngineRex]}
+	if c.Bin() == "" {
+		return e
+	}
+	e.Version = c.Version(ctx)
+	if err := c.Status(ctx); err == nil {
 		e.Available = true
 	}
 	return e

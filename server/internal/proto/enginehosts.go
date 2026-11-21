@@ -14,7 +14,7 @@ import (
 
 // EngineHostIDs are the hosts a set may hold, in their canonical order: a set is kept and sent in this order, and a
 // set without a default takes the first of it that it holds (classic herdr, the one with every capability, first).
-var EngineHostIDs = []string{EngineHerdr, EngineHerdrCore, EngineOrca, EngineTern, EnginePaseo, EngineCindy}
+var EngineHostIDs = []string{EngineHerdr, EngineHerdrCore, EngineOrca, EngineTern, EngineRex, EnginePaseo, EngineCindy}
 
 // EngineChoice is a machine's enabled hosts and its default host ("" exactly when Hosts is empty).
 type EngineChoice struct {
@@ -43,7 +43,7 @@ func NormalizeEngineChoice(hosts []string, def string) (EngineChoice, error) {
 	seen := map[string]bool{}
 	for _, h := range hosts {
 		if !IsEngineHost(h) {
-			return EngineChoice{}, fmt.Errorf("unknown engine host %q (herdr, herdr-core, orca, tern, paseo, cindy)", h)
+			return EngineChoice{}, fmt.Errorf("unknown engine host %q (herdr, herdr-core, orca, tern, rex, paseo, cindy)", h)
 		}
 		seen[h] = true
 	}

@@ -256,11 +256,14 @@
     <string name="agents_dialog_rename_space">スペース名を変更</string>
     <string name="agents_dialog_rename_space_text">herdrのワークスペース名も変更されます。</string>
     <string name="agents_dialog_rename_space_text_tern">Ternのこのセッション名も変更します。</string>
+    <string name="agents_dialog_rename_space_text_rex">Rexのこのセッション名も変更します。</string>
     <string name="agents_dialog_rename_text">タブ名はherdrに同期されます。セッション名はClaudeの/renameで変更され、Macのclaude --resumeにも表示されます。</string>
     <string name="agents_dialog_rename_text_tern">タブ名はTernに同期されます。セッション名はClaudeの/renameで変更され、Macのclaude --resumeにも表示されます。</string>
+    <string name="agents_dialog_rename_text_rex">タブ名はRexに同期されます。セッション名はClaudeの/renameで変更され、Macのclaude --resumeにも表示されます。</string>
     <string name="agents_dialog_save">保存</string>
     <string name="agents_dialog_tab_name">タブ名（herdrのタブ）</string>
     <string name="agents_dialog_tab_name_tern">タブ名（Ternのタブ）</string>
+    <string name="agents_dialog_tab_name_rex">タブ名（Rexのタブ）</string>
     <string name="agents_dialog_space_name">スペース名</string>
     <string name="agents_dialog_session_name">セッション名</string>
     <string name="agents_space_actions">スペースの操作</string>

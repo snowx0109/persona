@@ -42,7 +42,7 @@ nonisolated struct HostWorkspace: Decodable, Hashable, Identifiable, Sendable {
         guard session.machineRef == machineRef else { return false }
         if let bound = session.workspaceID, !bound.isEmpty { return (session.spaceKind == nil || session.spaceKind == source) && bound == sourceID }
         if session.spaceKind == source { return session.spaceID == sourceID }
-        if let kind = session.spaceKind, ["herdr", "herdr-core", "botmux", "paseo", "tern", "cindy"].contains(kind) { return false }
+        if let kind = session.spaceKind, ["herdr", "herdr-core", "botmux", "paseo", "tern", "rex", "cindy"].contains(kind) { return false }
         let path = Self.path(cwd)
         guard !path.isEmpty, Self.path(session.cwd) == path else { return false }
         return catalog.filter { $0.machineRef == machineRef && $0.source == source && Self.path($0.cwd) == path }.count == 1

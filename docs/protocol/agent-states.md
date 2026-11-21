@@ -123,15 +123,15 @@ Deciding "Needs you" / "done" and pushing are the hub's existing logic (based on
 - **Unrecognized agents** (`gemini`, `amp`…): used to be dropped entirely; now listed as a terminal-only row (`docs/integrations/opencode.md` ("Terminal rows for other agents")). The state is herdr's, so when it's stuck in a confirm box the phone shows "Needs you",
   but there's no card to answer (the hub doesn't parse screens of TUIs it doesn't know); answer it on the terminal page.
 
-### Claude in a Tern block
+### Claude in a Tern or Rex block
 
-Tern reports no agent state: every agent it lists is `unknown` (`node/hosttern.go`). For a Claude, node takes the status Claude Code keeps in its own
+Tern and Rex report no agent state: every agent they list is `unknown` (`node/hosttern.go`, `node/hostrex.go`). For a Claude, node takes the status Claude Code keeps in its own
 `sessions/<pid>.json` instead (the file of the block's `claude` process, the one that names its session; `ternClaudeStatus` in `server/internal/node/agent_status.go`),
 before the hook and transcript rules below:
 
 - `busy` → `working`.
 - `waiting` (a question, permission or other dialog of its own has the keyboard) → `blocked`: Needs you, and the manager makes its screen card as for herdr's `blocked`.
-- `idle` → `done` once the session has a transcript (`idle` before its first message). Tern has nothing like herdr's "seen in the terminal", so a finished
+- `idle` → `done` once the session has a transcript (`idle` before its first message). Tern and Rex have nothing like herdr's "seen in the terminal", so a finished
   turn is Unread until it is opened in an app, and its finished push follows the usual rules.
 - `shell` (Claude Code 2.1.31x and later: the turn is over while a background command or Monitor still runs) is read like `idle`: `done` once
   there is a transcript, and the row then shows Working (background) from the transcript's background tasks.
@@ -164,7 +164,7 @@ Global events carry `report_only`, and the hub doesn't take them as meaning the 
 Decisions (when herdr says `done` / `idle` / `unknown`; `blocked` and `working` follow herdr):
 
 - **A dialog is open in the terminal** (#2553, `node/dialogstatus.go`): for a Claude still `done` / `idle` / `unknown` after the checks above (excluding botmux, those in Claude's agents list, and ones where Persona itself is operating a picker)
-  in a herdr or Tern pane, node reads its screen in the background every 5 seconds (the list doesn't wait for the read). If the bottom is a dialog (`screen.Choosing`) it's recorded as `blocked`, `attention_reason` is the dialog's first line, and the "last said" in the App list and the assistant's `agents_list` shows that line.
+  in a herdr, Tern or Rex pane, node reads its screen in the background every 5 seconds (the list doesn't wait for the read). If the bottom is a dialog (`screen.Choosing`) it's recorded as `blocked`, `attention_reason` is the dialog's first line, and the "last said" in the App list and the assistant's `agents_list` shows that line.
   Why: Claude Code 2.1.309's auto mode billing notice blocked 3 Agents for several minutes; herdr reported done and Persona showed Unread.
 - **An allow Claude did not take** (#3752, `node/allowwatch.go`): whatever herdr says, `working` included. Once node hands a PermissionRequest
   hook an allow (a terminal Agent's, not the assistant's), it reads the pane 1.5 s later; a dialog still at the bottom (`screen.DialogHead`) lists

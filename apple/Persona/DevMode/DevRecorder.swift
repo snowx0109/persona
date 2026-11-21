@@ -108,6 +108,8 @@ nonisolated final class DevRecorder: DevProbe.Sink, @unchecked Sendable {
         var buffer: [String] = []
         /// Request errors already written this minute (route and status): one line each, the rest only counted.
         var errorsNoted: Set<String> = []
+        /// The connection tally's opens in this period in front (#11390).
+        var links = ConnectionOpens()
     }
 
     static let shared = DevRecorder(store: DevStore.shared)
@@ -134,13 +136,15 @@ nonisolated final class DevRecorder: DevProbe.Sink, @unchecked Sendable {
 
     // MARK: Switching
 
-    /// Starts counting, in front (`active`) or not, from `device` as it is now.
-    func start(active: Bool, page: String, device: Device) {
+    /// Starts counting, in front (`active`) or not, from `device` as it is now. `fresh`: at launch, so a period in front
+    /// is counted for the connection tally from its start; turned on by hand, the period under way is not.
+    func start(active: Bool, page: String, device: Device, fresh: Bool = true) {
         let now = clock(), p = power()
         state.withLock { s in
             guard !s.on else { return }
             s.on = true
             s.active = active
+            s.links.start(active: active, fresh: fresh, at: now)
             s.minute = Tally(from: now, power: p, device: device, background: !active)
             s.period = active ? Tally(from: now, power: p, device: device, background: false) : nil
             s.page = DevScrub.word(page)
@@ -162,9 +166,11 @@ nonisolated final class DevRecorder: DevProbe.Sink, @unchecked Sendable {
     /// The app came to the front or left it: the open summary closes, and a foreground period starts or ends.
     func lifecycle(active: Bool, device: Device) {
         let now = clock(), p = power()
-        let lines: [String] = state.withLock { s in
-            guard s.on, s.active != active else { return [] }
+        let (lines, tally): ([String], ConnectionTally) = state.withLock { s in
+            guard s.on, s.active != active else { return ([], ConnectionTally()) }
             s.active = active
+            var tally = ConnectionTally()
+            if active { s.links.front(at: now) } else { tally = s.links.back(at: now) }
             Self.settlePage(&s, now)
             var out: [String] = []
             if let m = s.minute, m.background == active { out.append(close(m, now, p, device, s)) }
@@ -179,9 +185,13 @@ nonisolated final class DevRecorder: DevProbe.Sink, @unchecked Sendable {
                 out.append(Self.line(now, "app", ["event": "background"]))
             }
             s.errorsNoted = []
-            return out
+            return (out, tally)
         }
         append(lines, flush: true)
+        if !tally.isEmpty {
+            let store = store
+            writer.async { store.addConnections(tally, now: now) }
+        }
     }
 
     /// Once a minute while active: the minute's line, and a fresh minute.
@@ -223,7 +233,9 @@ nonisolated final class DevRecorder: DevProbe.Sink, @unchecked Sendable {
     func path(_ path: NetPath) {
         let now = clock()
         let lines: [String] = state.withLock { s in
-            guard s.on, path != s.path else { return [] }
+            guard s.on else { return [] }
+            s.links.path(path.type != "none", at: now)
+            guard path != s.path else { return [] }
             s.path = path
             return [Self.line(now, "path", ["type": path.type, "expensive": path.expensive, "constrained": path.constrained])]
         }
@@ -280,6 +292,15 @@ nonisolated final class DevRecorder: DevProbe.Sink, @unchecked Sendable {
             return [Self.line(now, "socket", ["event": event.rawValue, "page": s.page])]
         }
         append(lines)
+    }
+
+    /// A hub group's groups, attempts and connects, for the connection tally (#11390).
+    func link(_ event: DevProbe.Link) {
+        let now = clock()
+        state.withLock { s in
+            guard s.on else { return }
+            s.links.link(event, at: now)
+        }
     }
 
     func error(_ report: ExtensionErrorReport) {

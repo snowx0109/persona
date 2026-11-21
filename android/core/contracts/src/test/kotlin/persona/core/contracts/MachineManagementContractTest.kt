@@ -54,6 +54,34 @@ class MachineManagementContractTest {
         assertEquals(true, m.nodeMismatch)
     }
 
+    @Test fun linkSwitchIsOptionalAndKeepsItsAuthoritativeFields() {
+        assertNull(JsonCodec.decodeFromString<Machine>("""{"id":"m1"}""").linkSwitch)
+        assertNull(JsonCodec.decodeFromString<Machine>("""{"id":"m1","link_switch":null}""").linkSwitch)
+        val machine = JsonCodec.decodeFromString<Machine>(
+            """{"id":"m1","link_switch":{"available":false,"reason":"in_progress","phase":"failed",
+              "error":"link_timeout","rollback_unconfirmed":true,"at":"2026-11-19T16:00:05+08:00","future":1}}""",
+        )
+        val state = requireNotNull(machine.linkSwitch)
+        assertFalse(state.available)
+        assertEquals("in_progress", state.reason)
+        assertEquals("failed", state.phase)
+        assertEquals("link_timeout", state.error)
+        assertTrue(state.rollbackUnconfirmed)
+        assertEquals(java.time.Instant.parse("2026-11-19T08:00:05Z"), parseTime(state.at))
+        assertEquals(state, JsonCodec.decodeFromString<MachineLinkSwitch>(JsonCodec.encodeToString(state)))
+        // A malformed safety flag cannot fall back to "rollback confirmed" in either a direct or nested state.
+        for (json in listOf(
+            """{"available":true,"phase":"failed","rollback_unconfirmed":"true"}""",
+            """{"id":"m1","link_switch":{"available":true,"phase":"failed","rollback_unconfirmed":"true"}}""",
+        )) {
+            val decoded = runCatching {
+                if ("link_switch" in json) JsonCodec.decodeFromString<Machine>(json)
+                else JsonCodec.decodeFromString<MachineLinkSwitch>(json)
+            }
+            assertTrue(json, decoded.exceptionOrNull() is kotlinx.serialization.SerializationException)
+        }
+    }
+
     @Test fun startingAndStartErrorDecode() {
         val s = JsonCodec.decodeFromString<Session>("""{"machine_id":"mac","session_id":"s1","status":"idle","starting":true}""")
         assertTrue(s.starting)

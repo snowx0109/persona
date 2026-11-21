@@ -60,6 +60,7 @@ DOMAINS = [
     "hub_update_mock",  # the hub's own update (/api/v1/hub/update…, GET /mock/hub_update), MOCK_HUB_UPDATE
     "imessage_mock",  # Messages' reader (/api/v1/imessage…), MOCK_IMESSAGE; the connector stays in mock_hub.py
     "saved_prompts_mock",  # Settings › Saved Prompts (/api/v1/assistant/saved-prompts…), MOCK_SAVED_PROMPTS
+    "link_switch_mock",  # SSH to Persona Link scenarios (/api/v1/machines/{mid}/link-switch), MOCK_LINK_SWITCH
     "starred_mock",  # Starred messages (/api/v1/assistant/starred…), MOCK_STARRED
     "task_skip_mock",  # One scheduled occurrence, MOCK_SKIP_OCCURRENCE
 ]

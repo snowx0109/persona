@@ -17,6 +17,7 @@ func TestNormalizeEngineChoice(t *testing.T) {
 		{hosts: []string{"orca", "herdr"}, def: "orca", wantHosts: []string{"herdr", "orca"}, wantDef: "orca"},
 		{hosts: []string{"paseo"}, wantHosts: []string{"paseo"}, wantDef: "paseo"},
 		{hosts: []string{"paseo", "tern", "herdr"}, def: "tern", wantHosts: []string{"herdr", "tern", "paseo"}, wantDef: "tern"}, // Tern after Orca, before Paseo
+		{hosts: []string{"paseo", "rex", "tern"}, def: "rex", wantHosts: []string{"tern", "rex", "paseo"}, wantDef: "rex"},       // Rex after Tern, before Paseo
 		{hosts: []string{"cindy"}, wantHosts: []string{"cindy"}, wantDef: "cindy"},
 		{hosts: []string{"cindy", "herdr"}, def: "cindy", wantHosts: []string{"herdr", "cindy"}, wantDef: "cindy"},
 		{hosts: []string{"cindy", "tern"}, def: "tern", wantHosts: []string{"tern", "cindy"}, wantDef: "tern"}, // Tern before Cindy

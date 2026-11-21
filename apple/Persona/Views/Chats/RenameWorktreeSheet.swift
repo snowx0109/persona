@@ -55,21 +55,30 @@ struct RenameWorktreeSheet: View {
 }
 
 nonisolated enum SessionRenameForm {
-    /// Only a Claude in a host that renames its tabs (herdr, Tern: docs/integrations/engines.md) edits both a tab and
+    /// Only a Claude in a host that renames its tabs (herdr, Tern, Rex: docs/integrations/engines.md) edits both a tab and
     /// the conversation. Other runtimes expose one name.
     static func showsTab(_ session: Session) -> Bool {
-        session.paneID != nil && ["herdr", "tern"].contains(session.hostKind ?? "herdr") && (session.agent ?? "claude") == "claude"
+        session.paneID != nil && ["herdr", "tern", "rex"].contains(session.hostKind ?? "herdr") && (session.agent ?? "claude") == "claude"
     }
 
     /// The tab field and the line under it name the host that renames the tab.
     static func tabField(_ session: Session) -> String {
-        session.hostKind == "tern" ? String(localized: "Tab name (Tern tab)") : String(localized: "Tab name (herdr tab)")
+        switch session.hostKind {
+        case "tern": String(localized: "Tab name (Tern tab)")
+        case "rex": String(localized: "Tab name (Rex tab)")
+        default: String(localized: "Tab name (herdr tab)")
+        }
     }
 
     static func tabNote(_ session: Session) -> String {
-        session.hostKind == "tern"
-            ? String(localized: "The tab name syncs to Tern. The session name uses Claude's /rename, so claude --resume on the Mac shows it too.")
-            : String(localized: "The tab name syncs to herdr. The session name uses Claude's /rename, so claude --resume on the Mac shows it too.")
+        switch session.hostKind {
+        case "tern":
+            String(localized: "The tab name syncs to Tern. The session name uses Claude's /rename, so claude --resume on the Mac shows it too.")
+        case "rex":
+            String(localized: "The tab name syncs to Rex. The session name uses Claude's /rename, so claude --resume on the Mac shows it too.")
+        default:
+            String(localized: "The tab name syncs to herdr. The session name uses Claude's /rename, so claude --resume on the Mac shows it too.")
+        }
     }
 
     static func body(_ session: Session, tab: String, title: String) -> APIClient.RenameBody {
@@ -79,11 +88,13 @@ nonisolated enum SessionRenameForm {
 }
 
 nonisolated enum SpaceRenameForm {
-    /// The line under a space's name says what else it renames: a herdr workspace, or a Tern session (Tern's spaces are
-    /// its sessions).
+    /// The line under a space's name says what else it renames: a herdr workspace, or a Tern/Rex session (their spaces
+    /// are sessions).
     static func note(_ group: SpaceGroup?) -> String {
-        group.flatMap(NodeMenu.kind) == "tern"
-            ? String(localized: "Also renames this session in Tern.")
-            : String(localized: "Also renames this workspace in herdr.")
+        switch group.flatMap(NodeMenu.kind) {
+        case "tern": String(localized: "Also renames this session in Tern.")
+        case "rex": String(localized: "Also renames this session in Rex.")
+        default: String(localized: "Also renames this workspace in herdr.")
+        }
     }
 }

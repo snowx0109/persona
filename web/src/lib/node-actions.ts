@@ -97,12 +97,12 @@ export interface NodeActionOptions {
   omit?: readonly string[];
 }
 
-/** Closing, splitting, git and running an agent in a shell are herdr's: another host (Orca, herdr-core, Tern, botmux) is
+/** Closing, splitting, git and running an agent in a shell are herdr's: another host (Orca, herdr-core, Tern, Rex, botmux) is
  *  not asked to do them. */
 export const canChangeHost = (host: string | undefined) => !host || host === "herdr";
 
-/** Renaming a workspace or a tab is herdr's and Tern's (the capability table in docs/integrations/engines.md). */
-export const canRenameIn = (host: string | undefined) => canChangeHost(host) || host === "tern";
+/** Renaming a workspace or a tab is herdr's, Tern's and Rex's (the capability table in docs/integrations/engines.md). */
+export const canRenameIn = (host: string | undefined) => canChangeHost(host) || host === "tern" || host === "rex";
 
 /** Claude Code, and a launcher the computer says it starts in a pane the user picked, keeping that pane when the start
  *  fails (`run_here`: its Codex launchers, #5504). An older computer's failed Codex start closes its pane, here the

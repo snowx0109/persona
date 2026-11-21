@@ -4,6 +4,7 @@
   "detail_herdr_both": "Sessions from both the terminal and the desktop app",
   "detail_orca": "Terminals in Orca",
   "detail_tern": "Terminals in Tern",
+  "detail_rex": "Terminals in Rex",
   "detail_paseo": "Agents in Paseo",
   "detail_cindy": "Agents in Cindy",
   "detection_offline": "Offline, nothing detected yet",

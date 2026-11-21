@@ -5,6 +5,7 @@ package persona.core.contracts.api
 import persona.core.contracts.CoreText.Key
 import persona.core.contracts.CoreText
 import persona.core.contracts.Machine
+import persona.core.contracts.MachineLinkSwitch
 import persona.core.contracts.WireSerializer
 import kotlinx.serialization.KeepGeneratedSerializer
 import kotlinx.serialization.SerialName
@@ -38,6 +39,12 @@ interface MachineManagement {
 
     /** `POST /api/v1/machines/{id}/reconnect`: the hub drops and redials the node; the result shows in `machines`. */
     suspend fun reconnect(machineId: String)
+
+    /**
+     * `POST /api/v1/machines/{id}/link-switch`: starts the confirmed SSH to Persona Link switch once.
+     * The accepted state and subsequent machine-list snapshots carry authoritative progress.
+     */
+    suspend fun startLinkSwitch(machineId: String): MachineLinkSwitch = throw UnsupportedOperationException("link switch")
 
     /**
      * `PUT /api/v1/machines/{id}/name {"name"}` (hubs with feature `machine_rename`, docs/protocol/protocol.md "Renaming a

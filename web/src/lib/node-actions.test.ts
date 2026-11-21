@@ -364,8 +364,10 @@ describe("a Tern node (#2154)", () => {
     expect(keys(nodeActions({ ...ternTab, online: false }, deps()))).not.toContain("node-rename");
     for (const host of ["orca", "herdr-core", "botmux"]) expect(keys(nodeActions({ ...ternTab, host }, deps()))).not.toContain("node-rename");
     expect(canRenameIn("tern")).toBe(true);
+    expect(canRenameIn("rex")).toBe(true);
     expect(canRenameIn(undefined)).toBe(true);
     expect(canChangeHost("tern")).toBe(false);
+    expect(canChangeHost("rex")).toBe(false);
   });
 });
 

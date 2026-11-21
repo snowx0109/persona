@@ -130,7 +130,7 @@ var errUnknownEngine = errors.New("unknown engine")
 // setEngine stores the machine's single engine (PUT with {"engine"}): the set it stands for.
 func (d *Devices) setEngine(ctx context.Context, machine, engine string) error {
 	if _, ok := proto.EngineNames[engine]; !ok {
-		return fmt.Errorf("%w %q (herdr, herdr-core, herdr-both, orca, paseo, cindy)", errUnknownEngine, engine)
+		return fmt.Errorf("%w %q (herdr, herdr-core, herdr-both, orca, tern, rex, paseo, cindy)", errUnknownEngine, engine)
 	}
 	return d.setEngineChoice(ctx, machine, proto.EngineHostsOf(engine))
 }

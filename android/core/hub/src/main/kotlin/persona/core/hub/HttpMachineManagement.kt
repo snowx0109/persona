@@ -2,6 +2,7 @@ package persona.core.hub
 
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.Machine
+import persona.core.contracts.MachineLinkSwitch
 import persona.core.contracts.api.AgentLauncher
 import persona.core.contracts.api.ClaudeSetting
 import persona.core.contracts.api.ClaudeDirsState
@@ -46,6 +47,17 @@ class HttpMachineManagement internal constructor(
     }
 
     override suspend fun reconnect(machineId: String) { call(api("machines", machineId, "reconnect"), "POST", buildJsonObject { }) }
+
+    override suspend fun startLinkSwitch(machineId: String): MachineLinkSwitch {
+        val answer = call(api("machines", machineId, "link-switch"), "POST", buildJsonObject { })
+        val state = answer["link_switch"] as? JsonObject
+            ?: throw HubFailure(HubError.Protocol, "hub answered the Link switch without link_switch", retryable = false)
+        if ((state["available"] as? JsonPrimitive)?.booleanOrNull == null) {
+            throw HubFailure(HubError.Protocol, "hub answered the Link switch without available", retryable = false)
+        }
+        return try { JsonCodec.decodeFromJsonElement(state) }
+        catch (error: kotlinx.serialization.SerializationException) { throw HubFailure(HubError.Protocol, cause = error) }
+    }
 
     override suspend fun deploy(machineId: String) { call(api("machines", machineId, "deploy"), "POST", buildJsonObject { }) }
 

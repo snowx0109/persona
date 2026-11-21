@@ -234,6 +234,7 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.EngineHerdrApp -> R.string.designsystem_core_engine_herdr_app
     CoreText.Key.EngineOrca -> R.string.designsystem_core_engine_orca
     CoreText.Key.EngineTern -> R.string.designsystem_core_engine_tern
+    CoreText.Key.EngineRex -> R.string.designsystem_core_engine_rex
     CoreText.Key.EnginePaseo -> R.string.designsystem_core_engine_paseo
     CoreText.Key.EngineCindy -> R.string.designsystem_core_engine_cindy
     CoreText.Key.EngineNone -> R.string.designsystem_core_engine_none

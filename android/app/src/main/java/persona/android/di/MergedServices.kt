@@ -31,6 +31,9 @@ import kotlinx.coroutines.flow.*
 private fun <T> GroupStack.mapped(flow: Flow<T>, transform: GroupNames.(T) -> T): Flow<T> =
     if (names.plain) flow else flow.map { names.transform(it) }
 
+internal suspend fun refreshOwnedSessions(machineId: String, call: suspend (namespace: String?, rawMachineId: String) -> Unit) =
+    call(GroupKeys.namespaceOf(machineId), GroupKeys.raw(machineId))
+
 internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : SessionsRepository, VerifiedSessionsRepository {
     override fun supportsFeature(machineId: String, feature: String) =
         feature in stacks.of(machineId)?.connection?.serverFeatures?.value.orEmpty()
@@ -92,6 +95,10 @@ internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : 
         }
     }
     override suspend fun refresh() = stacks.forEach { it.repositories.sessions.refresh() }
+    override suspend fun refreshMachine(machineId: String) = refreshOwnedSessions(machineId) { namespace, raw ->
+        // Unlike the all-hubs refresh, this read proves this machine's own hub answered (#10671).
+        stacks.use(namespace) { it.repositories.sessions.refreshMachine(raw) }
+    }
     override fun verifiedSessions(): Map<String, List<Session>> = stacks.stacks.value.flatMap { stack ->
         stack.repositories.sessions.verifiedSessions().map { (machine, sessions) ->
             stack.names.machineId(machine) to sessions.map { stack.names.session(it) }
@@ -222,6 +229,7 @@ internal fun mergedMachineManagement(
     override suspend fun launcherQuota(machineId: String, name: String, refresh: Boolean) =
         routes.on(machineId) { it.launcherQuota(machineId, name, refresh) }
     override suspend fun reconnect(machineId: String) = routes.on(machineId) { it.reconnect(machineId) }
+    override suspend fun startLinkSwitch(machineId: String) = routes.on(machineId) { it.startLinkSwitch(machineId) }
     override suspend fun rename(machineId: String, name: String) = routes.on(machineId) { it.rename(machineId, name) }
     override suspend fun deploy(machineId: String) = routes.on(machineId) { it.deploy(machineId) }
     override suspend fun herdr(machineId: String) = routes.on(machineId) { it.herdr(machineId) }

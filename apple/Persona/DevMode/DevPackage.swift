@@ -33,6 +33,8 @@ nonisolated enum DevPackage {
         var metricPayloads = 0
         var diagnosticPayloads = 0
         var logLines = 0
+        /// Weeks in the connection tally (#11390).
+        var connectionWeeks = 0
     }
 
     /// The file name: `persona-diagnostics-ios-20261117-1032.zip`, in local time.
@@ -92,6 +94,12 @@ nonisolated enum DevPackage {
             let log = log ?? Self.processLog(since: since)
             summary.logLines = log.count
             try (log.joined(separator: "\n") + (log.isEmpty ? "" : "\n")).write(to: folder.appending(path: "log.txt"), atomically: true, encoding: .utf8)
+            // The connection tally (#11390) goes with the logs, as the socket's own lines do; only when something was counted.
+            let tally = store.connectionTally(now: now)
+            if !tally.isEmpty, let data = tally.encoded() {
+                summary.connectionWeeks = tally.weeks.count
+                try data.write(to: folder.appending(path: "connections.json"))
+            }
         }
 
         let window = ["from": (since.map { max($0, from ?? $0) } ?? from).map(DevRecorder.stamp) as Any, "to": DevRecorder.stamp(now)]
@@ -102,7 +110,8 @@ nonisolated enum DevPackage {
             "exported_at": DevRecorder.stamp(now), "window": window,
             "categories": (["device"] + Category.allCases.filter(categories.contains).map(\.rawValue)),
             "counts": ["events": summary.events, "errors": summary.errors, "metric_payloads": summary.metricPayloads,
-                       "diagnostic_payloads": summary.diagnosticPayloads, "log_lines": summary.logLines],
+                       "diagnostic_payloads": summary.diagnosticPayloads, "log_lines": summary.logLines,
+                       "connection_weeks": summary.connectionWeeks],
         ]
         let data = try JSONSerialization.data(withJSONObject: Self.nulls(manifest), options: [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes])
         try data.write(to: folder.appending(path: "manifest.json"))
@@ -204,6 +213,19 @@ nonisolated enum DevPackage {
         - `metrickit/diagnostics-*.json`: `MXDiagnosticPayload`s: crashes, hangs, CPU and disk-write exceptions, with \
         unsymbolicated call stacks (binary name, UUID and offset); the app's dSYMs for `build` / `commit` symbolicate them.
         - `log.txt`: this launch's own log lines (subsystem `persona`); values the app marks private show as `<private>`.
+        - `connections.json` (with the logs, when something was counted): the connection tally, one entry per ISO week \
+        in UTC (`week`, its Monday `starts`), the last 8 kept. An open is one period with the app in front per hub group, \
+        from the moment the phone had a network path (Demo Mode left out); a period already under way when recording was \
+        turned on is not counted, nor one that ended with the app in front (a crash or a kill). `recorded_seconds`: seconds in front with recording on that week (0 or missing: \
+        nothing was recorded, not "no failures"). `not_connected`: opens whose socket never connected, by the most \
+        telling outcome its addresses had (`not_your_hub`: an added address answered as another hub; \
+        `certificate_not_trusted`: TLS failed the system's trust; `couldnt_connect`: refused, timed out, not found, \
+        lost, or not a healthy hub answer; `unknown`: cut short, or the period ended before any try failed). \
+        `connected`: opens that connected, by the address in use: `trust` (`system`: HTTPS straight to it; \
+        `plain_http`: plain HTTP straight to it; `tunnel`: through a tunnel or proxy, plain HTTP to its loopback end), \
+        `access_token` (it carries its own Cloudflare Access token), `route` (`direct`, `ssh_tunnel`, `in_app_tunnel`, \
+        `local_proxy`), `address` (`paired`, `added`, `mesh`), `hello_fingerprint` (the hub's hello lists a key \
+        fingerprint for itself) and `opens`. No address, host, port, hub id or fingerprint is in it.
 
         """
         let missing = DevPackage.Category.allCases.filter { !categories.contains($0) }

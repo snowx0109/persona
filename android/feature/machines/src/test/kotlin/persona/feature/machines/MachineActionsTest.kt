@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.*
 import kotlinx.serialization.json.JsonElement
 import org.junit.Assert.*
 import org.junit.Test
+import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MachineActionsTest {
@@ -20,8 +21,12 @@ class MachineActionsTest {
         override val machines = MutableStateFlow(machines)
         override val sessions = MutableStateFlow(emptyList<Session>())
         var refreshes = 0
+        val refreshedMachines = mutableListOf<String>()
+        var refreshFailure: Exception? = null
+        var refreshGate: CompletableDeferred<Unit>? = null
         var onRefresh: () -> Unit = {}
-        override suspend fun refresh() { refreshes++; onRefresh() }
+        override suspend fun refresh() { refreshGate?.await(); refreshes++; refreshFailure?.let { throw it }; onRefresh() }
+        override suspend fun refreshMachine(machineId: String) { refreshedMachines += machineId; refresh() }
     }
 
     private open class Management : MachineManagement {
@@ -48,6 +53,15 @@ class MachineActionsTest {
         /** Null: an older hub without the route. */
         var botmuxOn: Boolean? = true
         var botmuxFailure: Exception? = null
+        var linkAnswer = MachineLinkSwitch(available = false, phase = "checking", at = "2026-11-20T10:00:00Z")
+        var linkFailure: Exception? = null
+        var linkGate: CompletableDeferred<Unit>? = null
+        override suspend fun startLinkSwitch(machineId: String): MachineLinkSwitch {
+            calls += "link-switch:$machineId"
+            linkGate?.await()
+            linkFailure?.let { throw it }
+            return linkAnswer
+        }
         override suspend fun botmux(machineId: String): Boolean? { calls += "botmux:$machineId"; return botmuxOn }
         override suspend fun setBotmux(machineId: String, on: Boolean): Boolean {
             calls += "set-botmux:$machineId:$on"; botmuxFailure?.let { throw it }; botmuxOn = on; return on
@@ -247,5 +261,373 @@ class MachineActionsTest {
         // The boot time's words are the language's (MachinesShotsTest reads them in each language).
         assertNull(MetricFormat.boot(0.0, java.util.Locale.ENGLISH))
         assertTrue(MetricKind.Disk.percent && MetricKind.Cpu.percent && !MetricKind.Memory.percent)
+    }
+
+    @Test fun linkSwitchEligibilityComesOnlyFromTheHub() {
+        assertFalse(showsLinkSwitch(null, null))
+        assertFalse(canStartLinkSwitch(null, null, 0))
+        assertTrue(canStartLinkSwitch(MachineLinkSwitch(available = true), null, 0))
+        assertTrue(canStartLinkSwitch(MachineLinkSwitch(available = true, phase = "failed"), null, 0))
+        assertTrue(canStartLinkSwitch(MachineLinkSwitch(available = true, phase = "succeeded"), null, 0))
+        for (phase in listOf("checking", "installing", "connecting", "rolling_back", "future_phase")) {
+            assertFalse(phase, canStartLinkSwitch(MachineLinkSwitch(available = true, phase = phase), null, 0))
+        }
+        assertFalse(canStartLinkSwitch(MachineLinkSwitch(available = false, reason = "unsupported_os"), null, 0))
+        // A quiet ineligibility reason is not a new card; an operation or useful reason is.
+        assertFalse(showsLinkSwitch(MachineLinkSwitch(available = false, reason = "offline"), null))
+        assertFalse(showsLinkSwitch(MachineLinkSwitch(available = false, reason = "busy"), null))
+        assertTrue(showsLinkSwitch(MachineLinkSwitch(available = false, reason = "offline", phase = "failed"), null))
+        assertTrue(showsLinkSwitch(MachineLinkSwitch(available = false, reason = "unsupported_os"), null))
+    }
+
+    @Test fun linkSwitchConfirmIsImmediateSingleFlightAndUsesTheAcceptedState() = test {
+        val eligible = MachineLinkSwitch(available = true, at = "2026-11-20T09:59:59Z")
+        val sessions = Sessions(listOf(Machine("lab", linkSwitch = eligible)))
+        val gate = CompletableDeferred<Unit>()
+        val management = Management().apply { linkGate = gate }
+        val model = MachineActionsViewModel(management, sessions)
+        try {
+            model.observeLinkSwitch("lab")
+            runCurrent()
+            assertTrue(management.calls.isEmpty()) // observation and opening the page never start it
+            model.startLinkSwitch("lab")
+            // Local Starting is stored before the coroutine can make the request.
+            assertTrue(model.state.value.linkSwitches.getValue("lab").starting)
+            model.startLinkSwitch("lab")
+            runCurrent()
+            assertEquals(listOf("link-switch:lab"), management.calls)
+            gate.complete(Unit)
+            runCurrent()
+            assertEquals(listOf("link-switch:lab"), management.calls)
+            assertEquals(0, sessions.refreshes) // the 202 is enough; do not manufacture another read
+            val accepted = management.linkAnswer
+            assertEquals(accepted, shownLinkSwitch(eligible, model.state.value.linkSwitches["lab"], 0))
+            assertFalse(canStartLinkSwitch(eligible, model.state.value.linkSwitches["lab"], 0))
+            model.startLinkSwitch("lab")
+            runCurrent()
+            assertEquals(1, management.calls.size)
+            // A newer authoritative snapshot takes over and retires the local accepted overlay.
+            val done = accepted.copy(phase = "succeeded", at = "2026-11-20T10:00:01Z")
+            sessions.machines.value = listOf(Machine("lab", linkSwitch = done))
+            runCurrent()
+            assertNull(model.state.value.linkSwitches["lab"])
+            assertEquals(done, shownLinkSwitch(done, model.state.value.linkSwitches["lab"], 0))
+        } finally { model.viewModelScope.cancel() }
+    }
+
+    @Test fun linkSwitchProgressRollbackAndOutcomeStayAuthoritative() {
+        for (phase in listOf("checking", "installing", "connecting", "rolling_back")) {
+            assertTrue(phase, linkSwitchRunning(MachineLinkSwitch(available = false, phase = phase)))
+        }
+        for (phase in listOf("failed", "succeeded", "future_phase", null)) {
+            assertFalse(phase ?: "null", linkSwitchRunning(MachineLinkSwitch(available = false, phase = phase)))
+        }
+        val failed = MachineLinkSwitch(available = true, phase = "failed", error = "install_failed")
+        assertEquals(R.string.machines_link_switch_why_install_failed, linkSwitchReasonText(failed.error))
+        assertFalse(failed.rollbackUnconfirmed)
+        assertTrue(failed.copy(rollbackUnconfirmed = true).rollbackUnconfirmed)
+        assertEquals(R.string.machines_link_switch_why_unavailable, linkSwitchReasonText("brand_new_code"))
+        assertEquals("owner", machineLogin("/home/owner/"))
+        assertNull(machineLogin("/"))
+        val eligibleForBusy = MachineLinkSwitch(available = true)
+        assertTrue(linkSwitchConnectionBusy(eligibleForBusy, LinkSwitchAttempt(linkSwitchKey(eligibleForBusy)), 0))
+        val unresolved = LinkSwitchAttempt(linkSwitchKey(eligibleForBusy), starting = false,
+            notice = LinkSwitchNotice.Uncertain, refreshFailed = true)
+        assertTrue(linkSwitchConnectionBusy(eligibleForBusy, unresolved, 0))
+        assertFalse(linkSwitchConnectionBusy(eligibleForBusy, unresolved.copy(refreshFailed = false), 0))
+        val waiting = LinkSwitchAttempt(linkSwitchKey(eligibleForBusy))
+        assertTrue(linkSwitchWaiting(eligibleForBusy, waiting))
+        assertFalse(linkSwitchWaiting(eligibleForBusy.copy(phase = "checking"), waiting))
+        assertFalse(linkSwitchWaiting(eligibleForBusy, waiting.copy(starting = false)))
+    }
+
+    @Test fun linkSwitchTimestampsAndCompleteStateDecideWhichSnapshotWins() {
+        val before = MachineLinkSwitch(available = true, at = "2026-11-20T09:59:59Z")
+        val accepted = MachineLinkSwitch(available = false, phase = "checking", at = "2026-11-20T10:00:00Z")
+        val attempt = LinkSwitchAttempt(linkSwitchKey(before), starting = false, accepted = accepted, settledAt = 0)
+        assertEquals(accepted, shownLinkSwitch(before, attempt, 1_000))
+        assertEquals(accepted, shownLinkSwitch(before.copy(at = "2026-11-20T09:59:59.500Z"), attempt, 1_000))
+        val sameTime = accepted.copy(phase = "installing")
+        assertEquals(sameTime, shownLinkSwitch(sameTime, attempt, 1_000))
+        val later = accepted.copy(phase = "succeeded", at = "2026-11-20T10:00:00.001Z")
+        assertEquals(later, shownLinkSwitch(later, attempt, 1_000))
+        // An accepted operation's timestamp cannot be caught up by an eligibility-only snapshot with no operation time.
+        val delayedEligibility = MachineLinkSwitch(available = false, reason = "offline")
+        assertEquals(accepted, shownLinkSwitch(delayedEligibility, attempt, 1_000))
+        // Without two usable timestamps, only a changed complete state is newer than the pre-start list.
+        val timelessBefore = before.copy(at = null)
+        val timelessAccepted = accepted.copy(at = null)
+        val timeless = LinkSwitchAttempt(linkSwitchKey(timelessBefore), starting = false,
+            accepted = timelessAccepted, settledAt = 0)
+        assertEquals(timelessAccepted, shownLinkSwitch(timelessBefore, timeless, 1_000))
+        val malformed = timelessBefore.copy(at = "not-a-time")
+        assertEquals(malformed, shownLinkSwitch(malformed, timeless, 1_000))
+        assertEquals(later.copy(at = null), shownLinkSwitch(later.copy(at = null), timeless, 1_000))
+    }
+
+    @Test fun activeAcceptedLinkSwitchNeverExpiresBackIntoAStart() {
+        val eligible = MachineLinkSwitch(available = true)
+        val active = MachineLinkSwitch(available = false, phase = "connecting")
+        val attempt = LinkSwitchAttempt(linkSwitchKey(eligible), starting = false, accepted = active, settledAt = 0)
+        val beyondOrdinaryNoticeLinger = LINK_SWITCH_ATTEMPT_TTL_MILLIS * 10
+        assertTrue(linkSwitchAttemptLive(attempt, beyondOrdinaryNoticeLinger))
+        assertEquals(active, shownLinkSwitch(eligible, attempt, beyondOrdinaryNoticeLinger))
+        assertFalse(canStartLinkSwitch(eligible, attempt, beyondOrdinaryNoticeLinger))
+        val settled = attempt.copy(accepted = active.copy(phase = "succeeded"))
+        assertFalse(linkSwitchAttemptLive(settled, beyondOrdinaryNoticeLinger))
+        assertEquals(eligible, shownLinkSwitch(eligible, settled, beyondOrdinaryNoticeLinger))
+    }
+
+    @Test fun staleAcceptedLinkSwitchNeedsAReadAndNeverReposts() = test {
+        for (outcome in listOf<MachineLinkSwitch?>(null, MachineLinkSwitch(available = true))) {
+            var now = 0L
+            val eligible = MachineLinkSwitch(available = true)
+            val sessions = Sessions(listOf(Machine("lab", linkSwitch = eligible)))
+            val management = Management()
+            val model = MachineActionsViewModel(management, sessions, linkSwitchClock = { now })
+            try {
+                model.startLinkSwitch("lab")
+                runCurrent()
+                val accepted = model.state.value.linkSwitches.getValue("lab")
+                assertTrue(linkSwitchRunning(accepted.accepted))
+                now = LINK_SWITCH_STALE_AFTER_MILLIS + 1
+                assertTrue(linkSwitchNeedsStatus(accepted, now))
+                assertEquals(LinkSwitchNotice.Stale, linkSwitchNotice(eligible, accepted, now))
+                assertEquals(eligible, shownLinkSwitch(eligible, accepted, now))
+                assertFalse(canStartLinkSwitch(eligible, accepted, now))
+                assertTrue(linkSwitchConnectionBusy(eligible, accepted, now))
+
+                // A missing/absent terminal record cannot clear the attempt by itself, and a failed read leaves Check status.
+                sessions.machines.value = listOf(Machine("lab", linkSwitch = outcome))
+                sessions.refreshFailure = java.io.IOException("still unreachable")
+                model.checkLinkSwitch("lab")
+                runCurrent()
+                assertEquals(1, sessions.refreshes)
+                assertEquals(1, management.calls.size)
+                val failed = model.state.value.linkSwitches.getValue("lab")
+                assertTrue(failed.refreshFailed)
+                assertEquals(accepted.settledAt, failed.settledAt)
+                assertEquals(LinkSwitchNotice.Stale, linkSwitchNotice(outcome, failed, now))
+                assertFalse(canStartLinkSwitch(outcome, failed, now))
+                assertTrue(linkSwitchConnectionBusy(outcome, failed, now))
+
+                // Only the successful owning-hub read retires the overlay; its own current state is authoritative.
+                sessions.refreshFailure = null
+                model.checkLinkSwitch("lab")
+                runCurrent()
+                assertEquals(2, sessions.refreshes)
+                assertEquals(listOf("lab", "lab"), sessions.refreshedMachines)
+                assertEquals(1, management.calls.size)
+                assertNull(model.state.value.linkSwitches["lab"])
+                assertEquals(outcome, shownLinkSwitch(outcome, null, now))
+            } finally { model.viewModelScope.cancel() }
+        }
+    }
+
+    @Test fun forbiddenLinkSwitchDoesNotReadBackOrStartAgain() = test {
+        val eligible = MachineLinkSwitch(available = true)
+        val sessions = Sessions(listOf(Machine("lab", linkSwitch = eligible)))
+        val management = Management().apply {
+            linkFailure = HubFailure(HubError.Server, "read only", 403, "forbidden")
+        }
+        val model = MachineActionsViewModel(management, sessions)
+        try {
+            model.startLinkSwitch("lab")
+            runCurrent()
+            assertEquals(listOf("link-switch:lab"), management.calls)
+            assertEquals(0, sessions.refreshes)
+            val attempt = model.state.value.linkSwitches.getValue("lab")
+            val now = attempt.settledAt!!
+            assertEquals(LinkSwitchNotice.Forbidden, linkSwitchNotice(eligible, attempt, now))
+            assertFalse(canStartLinkSwitch(eligible, attempt, now))
+            model.startLinkSwitch("lab")
+            runCurrent()
+            assertEquals(1, management.calls.size)
+        } finally { model.viewModelScope.cancel() }
+    }
+
+    @Test fun definiteLinkSwitchRefusalsReadBackOnceWithoutRetrying() = test {
+        for (failure in listOf(
+            HubFailure(HubError.Server, "already switching", 409, "in_progress"),
+            HubFailure(HubError.Server, "computer is updating", 400, "busy"),
+        )) {
+            val eligible = MachineLinkSwitch(available = true)
+            val sessions = Sessions(listOf(Machine("lab", linkSwitch = eligible)))
+            val management = Management().apply { linkFailure = failure }
+            val model = MachineActionsViewModel(management, sessions)
+            try {
+                model.startLinkSwitch("lab")
+                runCurrent()
+                val attempt = model.state.value.linkSwitches.getValue("lab")
+                val now = attempt.settledAt!!
+                assertEquals(LinkSwitchNotice.Refused(failure.code), linkSwitchNotice(eligible, attempt, now))
+                assertFalse(attempt.refreshFailed)
+                advanceTimeBy(LINK_SWITCH_ATTEMPT_TTL_MILLIS + 1)
+                runCurrent()
+                assertEquals(listOf("link-switch:lab"), management.calls)
+                assertEquals(1, sessions.refreshes)
+                assertEquals(listOf("lab"), sessions.refreshedMachines)
+            } finally { model.viewModelScope.cancel() }
+        }
+    }
+
+    @Test fun uncertainLinkSwitchAnswersReadBackAndNeverRepostAutomatically() = test {
+        val failures = listOf(
+            IOException("connection dropped"),
+            HubFailure(HubError.Server, "bad gateway", 502),
+            HubFailure(HubError.Timeout, "timed out", 408),
+            HubFailure(HubError.RateLimited, "slow down", 429),
+            HubFailure(HubError.Protocol, "accepted without link_switch", retryable = false),
+        )
+        for (failure in failures) {
+            val eligible = MachineLinkSwitch(available = true)
+            val sessions = Sessions(listOf(Machine("lab", linkSwitch = eligible)))
+            val management = Management().apply { linkFailure = failure }
+            val model = MachineActionsViewModel(management, sessions)
+            try {
+                model.startLinkSwitch("lab")
+                runCurrent()
+                val attempt = model.state.value.linkSwitches.getValue("lab")
+                val now = attempt.settledAt!!
+                assertEquals(failure.message, LinkSwitchNotice.Uncertain, linkSwitchNotice(eligible, attempt, now))
+                assertFalse(attempt.refreshFailed)
+                // A successful read allows a new, separately confirmed start; it does not start one itself.
+                assertTrue(canStartLinkSwitch(eligible, attempt, now))
+                advanceTimeBy(LINK_SWITCH_ATTEMPT_TTL_MILLIS + 1)
+                runCurrent()
+                assertEquals(failure.message, listOf("link-switch:lab"), management.calls)
+                assertEquals(failure.message, 1, sessions.refreshes)
+                assertEquals(failure.message, listOf("lab"), sessions.refreshedMachines)
+            } finally { model.viewModelScope.cancel() }
+        }
+    }
+
+    @Test fun failedUncertainReadLeavesOnlyCheckStatusUntilAReadSucceeds() = test {
+        val eligible = MachineLinkSwitch(available = true)
+        val sessions = Sessions(listOf(Machine("lab", linkSwitch = eligible))).apply {
+            refreshFailure = IOException("list unavailable")
+        }
+        val management = Management().apply { linkFailure = IOException("answer lost") }
+        val model = MachineActionsViewModel(management, sessions)
+        try {
+            model.startLinkSwitch("lab")
+            runCurrent()
+            assertEquals(1, management.calls.size)
+            assertEquals(1, sessions.refreshes)
+            val uncertain = model.state.value.linkSwitches.getValue("lab")
+            assertTrue(uncertain.refreshFailed)
+            assertFalse(canStartLinkSwitch(eligible, uncertain, 0))
+            model.startLinkSwitch("lab")
+            model.checkLinkSwitch("lab")
+            model.checkLinkSwitch("lab") // one read in flight, and still no POST
+            runCurrent()
+            assertEquals(1, management.calls.size)
+            assertEquals(2, sessions.refreshes)
+            assertTrue(model.state.value.linkSwitches.getValue("lab").refreshFailed)
+            sessions.refreshFailure = null
+            model.checkLinkSwitch("lab")
+            assertTrue(model.state.value.linkSwitches.getValue("lab").starting)
+            runCurrent()
+            assertEquals(1, management.calls.size)
+            assertEquals(3, sessions.refreshes)
+            val checked = model.state.value.linkSwitches.getValue("lab")
+            assertFalse(checked.refreshFailed)
+            assertTrue(canStartLinkSwitch(eligible, checked, 0))
+            // Only this second explicit confirmation can make another request.
+            management.linkFailure = null
+            model.startLinkSwitch("lab")
+            runCurrent()
+            assertEquals(2, management.calls.size)
+            assertEquals(3, sessions.refreshes)
+        } finally { model.viewModelScope.cancel() }
+    }
+
+    @Test fun failedUncertainReadCannotBeReconciledByAnUnprovenListChange() = test {
+        val eligible = MachineLinkSwitch(available = true)
+        val sessions = Sessions(listOf(Machine("lab", linkSwitch = eligible))).apply {
+            refreshFailure = IOException("list unavailable")
+        }
+        val management = Management().apply { linkFailure = IOException("answer lost") }
+        val model = MachineActionsViewModel(management, sessions)
+        try {
+            model.startLinkSwitch("lab")
+            runCurrent()
+            assertTrue(model.state.value.linkSwitches.getValue("lab").refreshFailed)
+            // A push/cache change is not proof that the failed owning-hub read succeeded.
+            sessions.machines.value = listOf(Machine("lab"))
+            runCurrent()
+            val unresolved = model.state.value.linkSwitches.getValue("lab")
+            assertTrue(unresolved.refreshFailed)
+            assertEquals(LinkSwitchNotice.Uncertain, linkSwitchNotice(null, unresolved, 0))
+            assertFalse(canStartLinkSwitch(null, unresolved, 0))
+            assertTrue(linkSwitchConnectionBusy(null, unresolved, 0))
+            sessions.refreshFailure = null
+            model.checkLinkSwitch("lab")
+            runCurrent()
+            assertEquals(1, management.calls.size)
+            assertEquals(2, sessions.refreshes)
+            assertNull(model.state.value.linkSwitches["lab"])
+        } finally { model.viewModelScope.cancel() }
+    }
+
+    @Test fun cancelledLinkSwitchCallsBecomeRecoverableUncertaintyNotAStuckStart() = test {
+        val eligible = MachineLinkSwitch(available = true)
+        val sessions = Sessions(listOf(Machine("lab", linkSwitch = eligible)))
+        val post = CompletableDeferred<Unit>()
+        val management = Management().apply { linkGate = post }
+        val model = MachineActionsViewModel(management, sessions)
+        try {
+            model.startLinkSwitch("lab")
+            runCurrent()
+            assertTrue(model.state.value.linkSwitches.getValue("lab").starting)
+            // Cancelling the request does not destroy this ViewModel; another POST would not be safe.
+            post.cancel()
+            runCurrent()
+            val cancelled = model.state.value.linkSwitches.getValue("lab")
+            assertFalse(cancelled.starting)
+            assertEquals(LinkSwitchNotice.Uncertain, cancelled.notice)
+            assertTrue(cancelled.refreshFailed)
+            assertFalse(canStartLinkSwitch(eligible, cancelled, 0))
+            assertTrue(linkSwitchConnectionBusy(eligible, cancelled, 0))
+            assertEquals(listOf("link-switch:lab"), management.calls)
+
+            // The explicit read-only recovery can itself be cancelled and still offers Check status again.
+            val read = CompletableDeferred<Unit>()
+            sessions.refreshGate = read
+            model.checkLinkSwitch("lab")
+            runCurrent()
+            assertTrue(model.state.value.linkSwitches.getValue("lab").starting)
+            read.cancel()
+            runCurrent()
+            val checked = model.state.value.linkSwitches.getValue("lab")
+            assertFalse(checked.starting)
+            assertTrue(checked.refreshFailed)
+            assertFalse(canStartLinkSwitch(eligible, checked, 0))
+            assertEquals(listOf("link-switch:lab"), management.calls)
+        } finally { model.viewModelScope.cancel() }
+    }
+
+    @Test fun successfulReadbackUsesTheChangedMachineState() = test {
+        val eligible = MachineLinkSwitch(available = true)
+        val running = MachineLinkSwitch(available = false, phase = "installing", at = "2026-11-20T10:00:00Z")
+        val sessions = Sessions(listOf(Machine("lab", linkSwitch = eligible))).apply {
+            onRefresh = { sessionsSet(this, running) }
+        }
+        val management = Management().apply { linkFailure = IOException("answer lost") }
+        val model = MachineActionsViewModel(management, sessions)
+        try {
+            model.startLinkSwitch("lab")
+            runCurrent()
+            assertEquals(1, management.calls.size)
+            assertEquals(1, sessions.refreshes)
+            assertEquals(listOf("lab"), sessions.refreshedMachines)
+            // The changed list is authoritative, so the warning is gone and no new start is possible.
+            assertNull(model.state.value.linkSwitches["lab"])
+            assertFalse(canStartLinkSwitch(running, model.state.value.linkSwitches["lab"], 0))
+        } finally { model.viewModelScope.cancel() }
+    }
+
+    private fun sessionsSet(sessions: Sessions, state: MachineLinkSwitch) {
+        sessions.machines.value = listOf(Machine("lab", linkSwitch = state))
     }
 }

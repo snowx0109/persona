@@ -228,6 +228,7 @@
     <string name="designsystem_core_engine_herdr_app">デスクトップアプリで開いたターミナル</string>
     <string name="designsystem_core_engine_orca">Orcaのターミナル</string>
     <string name="designsystem_core_engine_tern">Ternのターミナル</string>
+    <string name="designsystem_core_engine_rex">Rexのターミナル</string>
     <string name="designsystem_core_engine_paseo">Paseoのエージェント</string>
     <string name="designsystem_core_engine_cindy">Cindyのエージェント</string>
     <string name="designsystem_core_engine_none">ターミナルエンジンなし</string>

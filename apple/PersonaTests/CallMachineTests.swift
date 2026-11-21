@@ -69,6 +69,26 @@ struct CallMachineTests {
         #expect(reports(m.handle(.conversationJoined, at: at(0.1))) == [.members], "re-reported once the conversation joined (#10495)")
     }
 
+    /// One members report per joined call (#12341): the update itself can bring another `joined` callback.
+    @Test func conversationJoinedReReportsMembersOnlyOnce() {
+        var m = owner()
+        _ = m.handle(.known, at: at(0))
+        _ = m.handle(.startAction, at: at(0))
+        #expect(reports(m.handle(.conversationJoined, at: at(0.1))) == [.members])
+        #expect(m.handle(.conversationJoined, at: at(0.2)).isEmpty, "a later joined callback reports nothing again")
+    }
+
+    /// The End's fulfil comes after the engine stopped, for every live call (#12341); an End after the call ended is
+    /// fulfilled at once and stops nothing.
+    @Test func anEndStopsTheEngineBeforeItIsFulfilled() {
+        var dialling = owner()
+        _ = dialling.handle(.known, at: at(0))
+        #expect(dialling.handle(.endAction, at: at(1)) == [.endEngine, .fulfil])
+        var m = connected()
+        #expect(m.handle(.endAction, at: at(30)) == [.endEngine, .fulfil])
+        #expect(m.handle(.endAction, at: at(31)) == [.fulfil])
+    }
+
     @Test func conversationJoinedDoesNothingForAnIncomingCall() {
         var m = urgent()
         _ = m.handle(.known, at: at(0))
@@ -470,7 +490,7 @@ struct CallMachineTests {
     @Test func theSystemsEndEndsTheEngineAndIsNotReportedBack() {
         var m = connected()
         let effects = m.handle(.endAction, at: at(30))
-        #expect(effects == [.fulfil, .endEngine])
+        #expect(effects == [.endEngine, .fulfil])
         #expect(m.phase == .ended(.hungUp))
         #expect(m.handle(.engineEnded(failed: false), at: at(30.1)).isEmpty, "the engine's own end after it: once")
         #expect(m.handle(.endAction, at: at(31)) == [.fulfil])
@@ -496,7 +516,7 @@ struct CallMachineTests {
 
     @Test func aDeclinedRingAndARingSettledElsewhere() {
         var declined = urgent()
-        #expect(declined.handle(.endAction, at: at(5)) == [.fulfil, .endEngine])
+        #expect(declined.handle(.endAction, at: at(5)) == [.endEngine, .fulfil])
         #expect(declined.phase == .ended(.declined))
         var missed = urgent()
         _ = missed.handle(.known, at: at(0))

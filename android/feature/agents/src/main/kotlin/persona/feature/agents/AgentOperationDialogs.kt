@@ -17,6 +17,7 @@ import persona.core.domain.sort.SessionRename
 import persona.core.domain.sort.canTerminal
 import persona.core.domain.sort.closeConfirmation
 import persona.core.domain.sort.deleteConfirmation
+import persona.core.domain.sort.isRex
 import persona.core.domain.sort.isTern
 import persona.core.domain.sort.worktreeKind
 
@@ -104,15 +105,24 @@ internal fun AgentOperationDialog(
  */
 @StringRes
 internal fun renameNote(session: Session, space: Boolean): Int? = when {
-    space -> if (session.spaceKind == "tern") R.string.agents_dialog_rename_space_text_tern else R.string.agents_dialog_rename_space_text
+    space -> when (session.spaceKind) {
+        "tern" -> R.string.agents_dialog_rename_space_text_tern
+        "rex" -> R.string.agents_dialog_rename_space_text_rex
+        else -> R.string.agents_dialog_rename_space_text
+    }
     !session.canTerminal -> null
     session.isTern -> R.string.agents_dialog_rename_text_tern
+    session.isRex -> R.string.agents_dialog_rename_text_rex
     else -> R.string.agents_dialog_rename_text
 }
 
-/** The tab field of a session's rename: a Tern pane's tab is a Tern tab. */
+/** The tab field of a session's rename: a Tern or Rex pane's tab is renamed in that engine. */
 @StringRes
-internal fun tabNameLabel(session: Session): Int = if (session.isTern) R.string.agents_dialog_tab_name_tern else R.string.agents_dialog_tab_name
+internal fun tabNameLabel(session: Session): Int = when {
+    session.isTern -> R.string.agents_dialog_tab_name_tern
+    session.isRex -> R.string.agents_dialog_tab_name_rex
+    else -> R.string.agents_dialog_tab_name
+}
 
 /** "Link to to-do…" / "Move to another to-do…" / "Unlink from to-do" of a project (iOS SpaceTodoMenu); [linked] when it is on a to-do. */
 internal class SpaceTodoActions(val linked: Boolean, val onLink: () -> Unit, val onUnlink: (() -> Unit)?)

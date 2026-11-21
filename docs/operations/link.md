@@ -642,10 +642,10 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 ## Switching from SSH
 
 A Linux computer the hub already reaches over SSH (`kind: ssh`) can move to Persona Link with one confirmed click (#10662), under
-**Switch to Persona Link** on its machine detail in the signed-in web app and on its row in the admin **Computers** page. The
-computer keeps its id and name, and so its pins, mutes, trust, settings and history, which are all stored by id. Afterwards it
-connects to the hub by itself, also from other networks. It is for people who manage their computers, so it sits with the
-machine's details, not in the Assistant. iOS and Android follow in #10671.
+**Switch to Persona Link** on its machine detail in the signed-in web app, on the iPhone / iPad app's advanced computer detail
+page (#10671), and on its row in the admin **Computers** page. The computer keeps its id and name, and so its pins, mutes, trust,
+settings and history, which are all stored by id. Afterwards it connects to the hub by itself, also from other networks. It is for
+people who manage their computers, so it sits with the machine's details, not in the Assistant.
 
 **What it needs**: the hub takes Persona Link (`public.tls_listen` or an `https://` `public_url`, as for pairing). The computer
 must also meet all of these:
@@ -759,6 +759,19 @@ After the build is put in place, its SHA-256 is checked once more before it runs
 
 Progress and the result come with the machine itself (`link_switch` in the machine list, [protocol.md](../protocol/protocol.md)),
 so every open client sees each step at once. A finished switch stays shown for an hour.
+
+On iPhone and iPad, the optional field is also the compatibility gate: an older hub or manager sends no field and the page does not
+change, and a computer owned by a linked hub is switched there. The confirmation uses the large-text-safe system dialog. One
+confirmation creates one app-lifetime attempt per computer, shared across detail-page remounts. **Starting…** is local feedback;
+the accepted 202 is held only until the machine list catches up by the hub's `at` clock (or changes when timestamps are absent).
+While a phase is running, its expected disconnect does not also show the ordinary offline error or **Reconnect**.
+
+A definite refusal other than 403 reads the machine list once and keeps its localized reason recoverable; 403 explains the full-access requirement without another read. A lost, unreadable, cancelled, 408, 429
+or 5xx answer is uncertain: the app reads the list once and never retries automatically. If the unchanged hub state still offers
+**Switch to Persona Link**, the owner may tap it and confirm again; a duplicate already running is the hub's ordinary 409 refusal.
+**Check Status** only reads the list again. A changed authoritative list clears the notice, and every settled attempt expires after
+two minutes as on web. A failed result with `rollback_unconfirmed` never claims the SSH fallback was restored and offers the same
+status check.
 
 
 ## Status line

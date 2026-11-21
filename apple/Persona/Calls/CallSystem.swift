@@ -201,6 +201,15 @@ nonisolated enum CallPlatform {
         return Handle(type: type, value: handle.value, displayName: handle.displayName)
     }
 
+    /// The outgoing call's members update (#9887, #12341): the owner as the local member, the assistant as the one remote
+    /// member, and active only once the conversation is joined. Apple's `members` are the remote participants "including
+    /// invited, but inactive" ones, so the owner is never among them; until the call joins, the assistant is invited, not
+    /// active.
+    static func outgoingMembers(_ remote: Handle, state: CallSystemState) -> Conversation.Update {
+        Conversation.Update(localMember: owner, members: [remote],
+                            activeRemoteMembers: state == .joined || state == .paused ? [remote] : [], capabilities: [.pausing])
+    }
+
     /// Each outgoing call's handle, from its Start until it ends: the remote member of its members update.
     private var outgoing: [UUID: Handle] = [:]
 
@@ -264,9 +273,10 @@ nonisolated enum CallPlatform {
         case .members:
             // The outgoing call's members (#9887): with no remote member the system has nobody to write into Recents.
             if let remote = outgoing[id] {
-                event = .conversationUpdated(Conversation.Update(localMember: Self.owner, members: [remote], activeRemoteMembers: [remote],
-                                                                 capabilities: [.pausing]))
-                Self.log.notice("recents: call \(id.uuidString, privacy: .public): members reported (remote \(String(describing: remote.type), privacy: .public) handle, local owner), the conversation \(String(describing: state), privacy: .public)")
+                let update = Self.outgoingMembers(remote, state: state)
+                event = .conversationUpdated(update)
+                let active = update.activeRemoteMembers?.isEmpty == false ? "active" : "invited"
+                Self.log.notice("recents: call \(id.uuidString, privacy: .public): members reported (remote \(String(describing: remote.type), privacy: .public) handle \(active, privacy: .public), local owner), the conversation \(String(describing: state), privacy: .public), local member \(conversation.localMember == nil ? "none" : "set", privacy: .public) before it")
             } else {
                 event = .conversationUpdated(Conversation.Update(capabilities: [.pausing]))
                 Self.log.notice("recents: call \(id.uuidString, privacy: .public): no Start handle for the members update, only pausing reported")
@@ -324,7 +334,16 @@ nonisolated enum CallPlatform {
             fulfil = { a.fulfill(dateConnected: .now) }
         case let a as EndConversationAction:
             kind = .end
-            fulfil = { a.fulfill(dateEnded: .now) }
+            // Fulfilled only once the engine stopped (`CallMachine`, #12341). A second later the system's list says
+            // whether it let the conversation go: only read, never ended or reported again.
+            fulfil = { [weak self] in
+                a.fulfill(dateEnded: .now)
+                Self.log.notice("call \(id.uuidString, privacy: .public): End fulfilled")
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(1))
+                    self?.logSnapshot(id, at: "after End")
+                }
+            }
         case let a as MuteConversationAction:
             kind = .mute(a.isMuted)
             fulfil = { a.fulfill() }
@@ -336,8 +355,18 @@ nonisolated enum CallPlatform {
             fulfil = { action.fulfill() }
         }
         Self.log.notice("call \(id.uuidString, privacy: .public): the system asks \(String(describing: kind), privacy: .public)\(kind == .start ? " (Start received)" : "", privacy: .public)")
+        if kind == .end { logSnapshot(id, at: "before End") }
         guard let handler else { return action.fail() }
         handler.system(perform: kind, for: id, fulfil: fulfil, fail: { action.fail() })
+    }
+
+    /// One `recents:` line on the conversation `id` as the system's list has it now (its state, or `absent`, and whether
+    /// it has a local member), around an End (#12341). Only this conversation: another call may rightly still be listed.
+    private func logSnapshot(_ id: UUID, at point: String) {
+        let conversation = manager.conversations.first { $0.uuid == id }
+        let state = conversation.map { String(describing: Self.state($0.state)) } ?? "absent"
+        let member = conversation.map { $0.localMember == nil ? "none" : "set" } ?? "n/a"
+        Self.log.notice("recents: call \(id.uuidString, privacy: .public): \(point, privacy: .public), manager list: \(state, privacy: .public), local member: \(member, privacy: .public)")
     }
 
     private static func state(_ lckState: Conversation.State) -> CallSystemState {
@@ -359,7 +388,7 @@ nonisolated enum CallPlatform {
             outgoing[id] = nil
             Self.log.notice("recents: call \(id.uuidString, privacy: .public): the system's conversation is left (local member \(localMember ? "set" : "none", privacy: .public))")
         } else {
-            Self.log.notice("call \(id.uuidString, privacy: .public): the system's conversation is \(String(describing: state), privacy: .public)")
+            Self.log.notice("call \(id.uuidString, privacy: .public): the system's conversation is \(String(describing: state), privacy: .public) (local member \(localMember ? "set" : "none", privacy: .public))")
         }
         handler?.system(changed: id, state: state)
     }

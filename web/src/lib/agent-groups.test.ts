@@ -103,9 +103,11 @@ describe("sessionHost", () => {
     expect(sessionHost(s("p2"))).toBe("herdr");
     expect(sessionHost(s("botmux:abc"))).toBe("botmux");
     expect(sessionHost(s("tern:42"))).toBe("tern");
+    expect(sessionHost(s("rex:block:b1"))).toBe("rex");
     expect(sessionHost(s())).toBe("");
     expect([...hostsOf([s("p1"), s("botmux:a"), s("botmux:b"), s()])].sort()).toEqual(["botmux", "herdr"]);
     expect([...hostsOf([s("p1"), s("tern:7"), s("tern:8")])].sort()).toEqual(["herdr", "tern"]);
+    expect([...hostsOf([s("p1"), s("rex:block:b1")])].sort()).toEqual(["herdr", "rex"]);
   });
 });
 

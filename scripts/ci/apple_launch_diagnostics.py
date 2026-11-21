@@ -9,6 +9,7 @@ import re
 import selectors
 import stat
 import subprocess
+import tempfile
 import time
 import uuid
 
@@ -33,8 +34,45 @@ class OutputLimitError(ValueError):
     """A bounded command, stream or export exceeded its existing byte limit."""
 
 
+class StatusPublicationError(Exception):
+    """The caller must keep an unwritten status distinct from collection categories."""
+
+
+def invalidate(status, evidence, context):
+    for path in (status, evidence, context):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            # A failed invalidation must not replace the original failure category.
+            pass
+
+
+def publish(path, data):
+    # Complete the bounded write before replacement exposes it as current evidence.
+    if isinstance(data, str):
+        data = data.encode()
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb", buffering=0) as stream:
+            stream.write(data)
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def publish_status(status, text):
+    try:
+        publish(status, text)
+    except OSError:
+        # Never recategorize an unwritten status as the collector's prior stage.
+        raise StatusPublicationError(text) from None
+
+
 def unavailable(status, category):
-    status.write_text(f"unavailable: {category}-failure; no launch cause established\n")
+    publish_status(status, f"unavailable: {category}-failure; no launch cause established\n")
 
 
 def identity(udid, bundle):
@@ -211,12 +249,13 @@ def stream_output(command, start, end, udid, bundle, timeout=TIMEOUT):
 def collect(output, destination, reader=bounded_output, now=None, stream_reader=stream_output, scope_root=None):
     status = destination / "simulator-launch.status.txt"
     evidence = destination / "simulator-launch.json"
-    evidence.unlink(missing_ok=True)
-    status.unlink(missing_ok=True)
-    category = "scope-validation"
+    context = destination / CONTEXT
+    category = "publication"
     try:
-        context, start, end = scope(scope_root or output, now or datetime.now(timezone.utc))
-        udid, bundle = context["udid"], context["bundle_id"]
+        invalidate(status, evidence, context)
+        category = "scope-validation"
+        context_data, start, end = scope(scope_root or output, now or datetime.now(timezone.utc))
+        udid, bundle = context_data["udid"], context_data["bundle_id"]
         predicate = ("(" + " OR ".join(f'process == "{name}"' for name in PROCESSES + RUNTIME_PROCESSES) +
                      f') AND (eventMessage CONTAINS[c] "{udid}" OR eventMessage CONTAINS "{bundle}"' +
                      ' OR process == "simdiskimaged" OR process == "cryptexd")')
@@ -240,25 +279,36 @@ def collect(output, destination, reader=bounded_output, now=None, stream_reader=
                     kept.append(item)
         if not kept:
             category = "publication"
-            status.write_text("unavailable: no scoped launch/runtime events; no cause established\n")
+            publish_status(status, "unavailable: no scoped launch/runtime events; no cause established\n")
             return
         category = "publication"
         encoded = json.dumps(kept, ensure_ascii=False).encode()
         if len(encoded) > MAX_BYTES:
             raise OutputLimitError("export exceeded byte limit")
-        evidence.write_bytes(encoded)
-        (destination / CONTEXT).write_text(json.dumps(context))
-        status.write_text(f"captured {len(kept)} scoped events; diagnosis still required\n")
-    except (TimeoutError, subprocess.TimeoutExpired):
-        # Preserve the established command-deadline category, including the default stream.
-        status.write_text("unavailable: scoped log command timed out\n")
-    except OutputLimitError:
-        unavailable(status, "output-limit")
-    except StreamParseError:
-        unavailable(status, "stream-parse")
-    except COLLECTION_ERRORS:
-        # Only fixed stage categories are exported, never raw errors or a fallback query.
-        unavailable(status, category)
+        # Context alone cannot be mistaken for a bundle; evidence is its final commit point.
+        publish(context, json.dumps(context_data))
+        try:
+            publish(evidence, encoded)
+            publish_status(status, f"captured {len(kept)} scoped events; diagnosis still required\n")
+        except COLLECTION_ERRORS + (StatusPublicationError,):
+            evidence.unlink(missing_ok=True)
+            context.unlink(missing_ok=True)
+            raise
+    except StatusPublicationError:
+        invalidate(status, evidence, context)
+        raise
+    except COLLECTION_ERRORS as error:
+        invalidate(status, evidence, context)
+        if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+            # Preserve the established command-deadline category, including the default stream.
+            publish_status(status, "unavailable: scoped log command timed out\n")
+        elif isinstance(error, OutputLimitError):
+            unavailable(status, "output-limit")
+        elif isinstance(error, StreamParseError):
+            unavailable(status, "stream-parse")
+        else:
+            # Only fixed stage categories are exported, never raw errors or a fallback query.
+            unavailable(status, category)
 
 
 def main():

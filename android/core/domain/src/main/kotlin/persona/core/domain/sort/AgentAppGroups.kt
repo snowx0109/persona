@@ -47,13 +47,14 @@ object AppGroups {
     /** Desktop apps first in this order; any other after them by id. */
     private val known = listOf("Claude Code", "Codex")
     /** Terminal engines with their own section, after the desktop apps (iOS `AppGroups.engines`). */
-    val engines = listOf("herdr", "herdr-core", "orca", "tern")
+    val engines = listOf("herdr", "herdr-core", "orca", "tern", "rex")
 
     fun engineName(id: String): String = when (id) {
         "herdr" -> "herdr"
         "herdr-core" -> "Herdr App"
         "orca" -> "Orca"
         "tern" -> "Tern"
+        "rex" -> "Rex"
         else -> id
     }
 

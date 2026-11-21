@@ -135,18 +135,20 @@ val Session.hostKind: String
 val Session.isBotmux: Boolean get() = hostKind == "botmux"
 /** A pane of Tern: its tab is renamed in Tern, not herdr (the rename dialogs say so, as on iOS). */
 val Session.isTern: Boolean get() = hostKind == "tern"
+/** A pane of Rex: its tab is renamed in Rex, not herdr (the rename dialogs say so, as on iOS). */
+val Session.isRex: Boolean get() = hostKind == "rex"
 /** Null for the rest (Orca, runtimes, apps), which carry no source label (iOS `Session.source`). */
 val Session.agentSource: AgentSource?
     get() = when (hostKind) {
         "botmux" -> AgentSource.Feishu
-        "herdr", "herdr-core", "tern" -> AgentSource.Terminal
+        "herdr", "herdr-core", "tern", "rex" -> AgentSource.Terminal
         else -> null
     }
 // The kinds a pane id may be prefixed with: keep in step with Kinds in server/internal/host/host.go.
-private val HOST_KINDS = setOf("orca", "herdr-core", "tern", "botmux")
+private val HOST_KINDS = setOf("orca", "herdr-core", "tern", "rex", "botmux")
 
 // The engines that make a session's own worktree (#6115): worktree/status and worktree/remove take one as their kind.
-private val WORKTREE_ENGINES = setOf("herdr", "herdr-core", "orca", "tern", "paseo", "cindy")
+private val WORKTREE_ENGINES = setOf("herdr", "herdr-core", "orca", "tern", "rex", "paseo", "cindy")
 
 /**
  * The engine a session runs in, which made its own worktree (Paseo makes its own): its terminal's host, else the runtime

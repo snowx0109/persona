@@ -73,9 +73,11 @@
     <string name="chat_chrome_notice_dismiss">Dismiss</string>
     <string name="chat_chrome_rename_text">The tab name syncs to herdr. The session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
     <string name="chat_chrome_rename_text_tern">The tab name syncs to Tern. The session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
+    <string name="chat_chrome_rename_text_rex">The tab name syncs to Rex. The session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
     <string name="chat_chrome_save">Save</string>
     <string name="chat_chrome_tab_name">Tab name (herdr tab)</string>
     <string name="chat_chrome_tab_name_tern">Tab name (Tern tab)</string>
+    <string name="chat_chrome_tab_name_rex">Tab name (Rex tab)</string>
     <string name="chat_chrome_session_name">Session name</string>
     <string name="chat_chrome_delete">Delete</string>
     <string name="chat_chrome_peers_title">Agents in this space</string>
