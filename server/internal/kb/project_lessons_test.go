@@ -65,6 +65,40 @@ func TestProjectLessonsKeepTheNewestVersion(t *testing.T) {
 	}
 }
 
+// A deleted lesson keeps every version it had, the newest first: the one its tombstone retired, the version before the
+// owner's correction and the task's first words. Earlier versions of a lesson still live are not among them.
+func TestProjectLessonsKeepEveryVersionOfADeletedLesson(t *testing.T) {
+	e := projectMemoryEngine(t, t.TempDir())
+	putMemoryProject(t, e, "persona")
+	appendLessons(t, e, "persona",
+		lessonRecord("lesson-a", LessonMissingContext, "Ask which account to use."),
+		lessonRecord("lesson-b", LessonWastedStep, "Skip the full rebuild."))
+	again := lessonRecord("lesson-a2", LessonMissingContext, "Ask which account to use.")
+	again.SupersedesID, again.Seen = "lesson-a", 2
+	appendLessons(t, e, "persona", again)
+	edited := lessonRecord("lesson-a3", LessonMissingContext, "Ask the owner which account to use first.")
+	edited.SupersedesID, edited.Verification = "lesson-a2", ProjectMemoryOwner
+	b2 := lessonRecord("lesson-b2", LessonWastedStep, "Build only the target under test.")
+	b2.SupersedesID = "lesson-b"
+	appendLessons(t, e, "persona", edited, b2)
+	appendLessons(t, e, "persona", ProjectMemoryRecord{ID: "lesson-a-retired", Type: ProjectMemoryLessonRetired,
+		SupersedesID: "lesson-a3", Kind: LessonMissingContext, Conclusion: edited.Conclusion})
+
+	got := e.ProjectLessons("persona")
+	var versions []string
+	for _, r := range got.RetiredVersions {
+		versions = append(versions, r.ID+": "+r.Conclusion)
+	}
+	want := []string{"lesson-a3: Ask the owner which account to use first.", "lesson-a2: Ask which account to use.",
+		"lesson-a: Ask which account to use."}
+	if strings.Join(versions, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("versions of the deleted lesson = %q, want %q", versions, want)
+	}
+	if ids := liveIDs(got); len(ids) != 1 || ids[0] != "lesson-b2" || len(got.Retired) != 1 {
+		t.Fatalf("live = %v, retired = %+v", ids, got.Retired)
+	}
+}
+
 // A write is checked against the lessons as they are under the lock: an ID that is taken, a supersede of a version that
 // is no longer the newest, two successors of one version and a tombstone naming no lesson are refused, and a refused
 // plan writes nothing.

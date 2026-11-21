@@ -5256,7 +5256,7 @@ taught, then the stale ones in the same order.
 | --- | --- | --- |
 | GET | `/api/v1/kb/projects/{id}/lessons` | The list |
 | PUT | `/api/v1/kb/projects/{id}/lessons/{lesson}` | `{"text": "…"}`: the owner's correction (one line, at most 200 characters; `400` when empty: delete it instead). The lesson keeps its kind, count and sources, gets a new `id` and `edited: true`; the same text again changes nothing |
-| DELETE | `/api/v1/kb/projects/{id}/lessons/{lesson}` | Deletes it: no longer listed or handed out, and a lesson with the same text is not learned again |
+| DELETE | `/api/v1/kb/projects/{id}/lessons/{lesson}` | Deletes it: no longer listed or handed out, and not learned again, in the words of any of its versions or in other words the lessons model ties to it |
 
 A lesson taught again, corrected or deleted since the page read it answers `409` with `code: "lesson_changed"`, `error`, and
 the list as it is now (`enabled`, `lessons`); one that is not there `404`. `403 kb_read_only` while the knowledge base is

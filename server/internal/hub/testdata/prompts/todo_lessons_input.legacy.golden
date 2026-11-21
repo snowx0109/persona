@@ -30,3 +30,6 @@ Fixed: the page used a fixed width.
 
 这个项目已经记下的经验：
 - [lesson-1] missing_context：Use the stock simulator for layout bugs.
+
+用户删掉的经验（不要再学）：
+- [lesson-retired-1] wasted_step：Rebuild the whole app before every test.

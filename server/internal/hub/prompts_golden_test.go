@@ -375,8 +375,9 @@ func TestTodoProjectMemoryGolden(t *testing.T) {
 }
 
 // What an accepted task taught (todo/lessons, #12295): the system prompt, the task's story (a rework round with the
-// criterion it found not met, a scope change, an answer of the owner's, the time, the reply, a lesson the project has),
-// and the block of lessons a new Agent of the project gets; nothing without lessons. Each in the three languages.
+// criterion it found not met, a scope change, an answer of the owner's, the time, the reply, a lesson the project has,
+// one the owner deleted), and the block of lessons a new Agent of the project gets; nothing without lessons. Each in the
+// three languages.
 func TestTodoLessonsGolden(t *testing.T) {
 	if got := prompts.RenderTodoProjectLessons(prompts.TodoProjectLessons{Name: "x"}); got != "" {
 		t.Fatalf("no lessons = %q, want nothing", got)
@@ -396,7 +397,8 @@ func TestTodoLessonsGolden(t *testing.T) {
 				Answers:       []prompts.TodoLessonsAnswer{{Question: "Which simulator?", Choice: "The stock one"}},
 				Result:        []prompts.TodoLessonsCriterion{{Criterion: "No crash in landscape", State: "met", Evidence: "Screenshot test passes"}},
 				ExpectMinutes: 30, ActualMinutes: 95, Reply: "Fixed: the page used a fixed width.",
-				Known: []prompts.TodoLessonsKnown{{ID: "lesson-1", Kind: "missing_context", Text: "Use the stock simulator for layout bugs."}},
+				Known:   []prompts.TodoLessonsKnown{{ID: "lesson-1", Kind: "missing_context", Text: "Use the stock simulator for layout bugs."}},
+				Deleted: []prompts.TodoLessonsKnown{{ID: "lesson-retired-1", Kind: "wasted_step", Text: "Rebuild the whole app before every test."}},
 			}))
 			golden(t, "todo_project_lessons."+tc.name, prompts.RenderTodoProjectLessons(prompts.TodoProjectLessons{
 				Language: tc.language, Name: `Weather "direction"`, Lessons: []prompts.TodoProjectLesson{

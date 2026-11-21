@@ -15,8 +15,10 @@ import (
 // records in the project's memory.jsonl, beside the worker outcomes, decisions and pitfalls (M1), and are never changed
 // in place. A lesson taught again, or corrected by the owner, is appended as a record that supersedes it. A deleted
 // lesson gets a lesson_retired tombstone that keeps its kind and text, so the same lesson is not learned again (an
-// undo sticks, docs/design/PRINCIPLES.md 3). Readers keep the newest record of each chain. A manager from before
-// lessons skips these types (ProjectMemoryForDispatch reads only the types it knows).
+// undo sticks, docs/design/PRINCIPLES.md 3). Readers keep the newest record of each chain, and every version of a
+// deleted one: the tombstone keeps only the last text, and the words a task taught before the owner's correction must
+// stay deleted too. A manager from before lessons skips these types (ProjectMemoryForDispatch reads only the types it
+// knows).
 
 // The lesson kinds.
 const (
@@ -28,16 +30,6 @@ const (
 
 // LessonKinds are the kinds in the order the apps list them.
 var LessonKinds = []string{LessonRepeatedMistake, LessonMissingContext, LessonWastedStep, LessonImprovement}
-
-// ValidLessonKind says whether kind is one of LessonKinds.
-func ValidLessonKind(kind string) bool {
-	for _, k := range LessonKinds {
-		if k == kind {
-			return true
-		}
-	}
-	return false
-}
 
 // projectLessonsScanMost bounds how much of memory.jsonl's tail a lessons read goes through, in bytes. Lessons are a few
 // lines per accepted task, and a lesson that was taught again or edited has a newer record anyway. A variable so a test
@@ -54,8 +46,21 @@ type ProjectLessons struct {
 	Live []ProjectMemoryRecord
 	// Retired are the tombstones of deleted lessons, each with the deleted lesson's kind and text, newest first.
 	Retired []ProjectMemoryRecord
+	// RetiredVersions are the versions of the deleted lessons, newest first: the one a tombstone retired and every one
+	// before it, such as a task's words the owner corrected before deleting the lesson.
+	RetiredVersions []ProjectMemoryRecord
 	// IDs are every lesson record and tombstone read, older versions included.
 	IDs map[string]bool
+}
+
+// ValidLessonKind says whether kind is one of LessonKinds.
+func ValidLessonKind(kind string) bool {
+	for _, k := range LessonKinds {
+		if k == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // Find is the live lesson with this ID (only a newest version is live).
@@ -90,7 +95,9 @@ func (e *Engine) ProjectLessons(slug string) ProjectLessons {
 }
 
 // projectLessonsLocked reads the lesson records of memory.jsonl's tail, newest first. A record seen later in the read
-// (older) that a newer one supersedes or retires is an earlier version and not live. Callers hold s.mu.
+// (older) that a newer one supersedes or retires is an earlier version and not live; one in a chain a tombstone ends is
+// a version of a deleted lesson. A record only ever supersedes an older one, so a chain is read from its newest record
+// back. Callers hold s.mu.
 func (s *Store) projectLessonsLocked(slug string) (ProjectLessons, error) {
 	out := ProjectLessons{IDs: map[string]bool{}}
 	f, err := os.Open(s.path(KindProject, slug, "memory.jsonl"))
@@ -109,7 +116,7 @@ func (s *Store) projectLessonsLocked(slug string) (ProjectLessons, error) {
 	if size > projectLessonsScanMost {
 		start = size - projectLessonsScanMost // the cut line is not JSON and is skipped
 	}
-	superseded := map[string]bool{}
+	superseded, retired := map[string]bool{}, map[string]bool{}
 	err = linesBack(io.NewSectionReader(f, start, size-start), size-start, logChunk, func(line []byte) bool {
 		var r ProjectMemoryRecord
 		if len(bytes.TrimSpace(line)) == 0 || json.Unmarshal(line, &r) != nil || r.ID == "" {
@@ -125,6 +132,10 @@ func (s *Store) projectLessonsLocked(slug string) (ProjectLessons, error) {
 		switch {
 		case r.Type == ProjectMemoryLessonRetired:
 			out.Retired = append(out.Retired, r)
+			retired[r.SupersedesID] = true
+		case retired[r.ID]:
+			out.RetiredVersions = append(out.RetiredVersions, r)
+			retired[r.SupersedesID] = true
 		case !superseded[r.ID] && strings.TrimSpace(r.Conclusion) != "":
 			out.Live = append(out.Live, r)
 		}

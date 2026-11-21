@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -165,7 +167,8 @@ func appendTestLesson(t *testing.T, e *kb.Engine, slug, id, kind, text string, a
 
 // A lesson the project has is taught again, not stored twice: the one the model named, else one with the same text.
 // Its count goes up, the to-do joins its sources and the owner's text is kept. The same to-do never counts twice, a
-// lesson the owner deleted is not learned again, and a completion already learned from writes nothing.
+// lesson the owner deleted is not learned again (in the words of any of its versions, or named in same_as), and a
+// completion already learned from writes nothing.
 func TestPlanLessonsMergesAndHonoursDeletions(t *testing.T) {
 	now := time.Date(2026, 11, 21, 8, 0, 0, 0, time.UTC)
 	old := kb.ProjectMemoryRecord{ID: "lesson-a", Type: kb.ProjectMemoryLesson, Kind: kb.LessonMissingContext,
@@ -177,13 +180,19 @@ func TestPlanLessonsMergesAndHonoursDeletions(t *testing.T) {
 	cur := kb.ProjectLessons{Live: []kb.ProjectMemoryRecord{same, old},
 		Retired: []kb.ProjectMemoryRecord{{ID: "lesson-x", Type: kb.ProjectMemoryLessonRetired, SupersedesID: "lesson-c",
 			Kind: kb.LessonImprovement, Conclusion: "Always rebuild everything."}},
-		IDs: map[string]bool{"lesson-a": true, "lesson-b": true, "lesson-c": true, "lesson-x": true}}
+		RetiredVersions: []kb.ProjectMemoryRecord{
+			{ID: "lesson-c", Type: kb.ProjectMemoryLesson, SupersedesID: "lesson-c0", Kind: kb.LessonImprovement, Conclusion: "Always rebuild everything."},
+			{ID: "lesson-c0", Type: kb.ProjectMemoryLesson, Kind: kb.LessonImprovement, Conclusion: "Rebuild the app from scratch each time."}},
+		IDs: map[string]bool{"lesson-a": true, "lesson-b": true, "lesson-c": true, "lesson-c0": true, "lesson-x": true}}
 	key := lessonKey("todo-9", now)
 	got := planLessons(cur, "todo-9", key, now, []foundLesson{
 		{Kind: kb.LessonMissingContext, Text: "Staging needs a separate token.", SameAs: "lesson-a"},
 		{Kind: kb.LessonImprovement, Text: "run the focused test, before the whole suite", SameAs: ""},
 		{Kind: kb.LessonImprovement, Text: "ALWAYS rebuild everything", SameAs: ""},
 		{Kind: kb.LessonRepeatedMistake, Text: "Check the landscape layout before handing in.", SameAs: "lesson-gone"},
+		{Kind: kb.LessonImprovement, Text: "rebuild the app from scratch, each time", SameAs: ""},
+		{Kind: kb.LessonImprovement, Text: "Start every build clean.", SameAs: "lesson-x"},
+		{Kind: kb.LessonImprovement, Text: "Start every build clean.", SameAs: "lesson-c0"},
 	})
 	if len(got) != 3 {
 		t.Fatalf("plan = %+v, want two merges and one new lesson", got)
@@ -212,6 +221,33 @@ func TestPlanLessonsMergesAndHonoursDeletions(t *testing.T) {
 	cur2 := kb.ProjectLessons{Live: []kb.ProjectMemoryRecord{old}, IDs: map[string]bool{"lesson-a": true}}
 	if again := planLessons(cur2, "todo-2", lessonKey("todo-2", now.Add(time.Hour)), now, []foundLesson{{Kind: kb.LessonMissingContext, Text: "x", SameAs: "lesson-a"}}); again != nil {
 		t.Fatalf("the same to-do taught a lesson twice: %+v", again)
+	}
+}
+
+// The model reads the newest deleted lessons with their tombstones' IDs, each text once and at most lessonsDeletedMost,
+// after the project's lessons; with none deleted its input has no such list.
+func TestLessonsInputListsTheNewestDeletedLessons(t *testing.T) {
+	todo := Todo{Title: "修登录", Supervision: &Supervision{}}
+	known := kb.ProjectLessons{Live: []kb.ProjectMemoryRecord{{ID: "lesson-live", Kind: kb.LessonImprovement, Conclusion: "先跑单个测试。"}}}
+	for i := range lessonsDeletedMost + 2 {
+		known.Retired = append(known.Retired, kb.ProjectMemoryRecord{ID: fmt.Sprintf("lesson-retired-%d", i),
+			Type: kb.ProjectMemoryLessonRetired, SupersedesID: fmt.Sprintf("lesson-%d", i), Kind: kb.LessonWastedStep,
+			Conclusion: fmt.Sprintf("删掉的第 %d 条。", i)})
+	}
+	// The owner gave a later lesson the text of one deleted before and deleted it too: the model reads that text once.
+	known.Retired = slices.Insert(known.Retired, 1, kb.ProjectMemoryRecord{ID: "lesson-retired-again",
+		Type: kb.ProjectMemoryLessonRetired, SupersedesID: "lesson-again", Kind: kb.LessonWastedStep, Conclusion: "删掉的第 0 条"})
+	in := lessonsInput("", todo, nil, nil, time.Time{}, nil, nil, known)
+	if len(in.Deleted) != lessonsDeletedMost || in.Deleted[0].ID != "lesson-retired-0" || in.Deleted[1].ID != "lesson-retired-1" ||
+		in.Deleted[lessonsDeletedMost-1].ID != fmt.Sprintf("lesson-retired-%d", lessonsDeletedMost-1) {
+		t.Fatalf("deleted = %+v", in.Deleted)
+	}
+	got := prompts.RenderTodoLessonsInput(in)
+	if want := "这个项目已经记下的经验：\n- [lesson-live] improvement：先跑单个测试。\n\n用户删掉的经验（不要再学）：\n- [lesson-retired-0] wasted_step：删掉的第 0 条。\n- [lesson-retired-1] wasted_step：删掉的第 1 条。\n"; !strings.Contains(got, want) {
+		t.Fatalf("input = %q, want it to hold %q", got, want)
+	}
+	if none := prompts.RenderTodoLessonsInput(lessonsInput("", todo, nil, nil, time.Time{}, nil, nil, kb.ProjectLessons{})); strings.Contains(none, "删掉") {
+		t.Fatalf("an input with nothing deleted lists deleted lessons: %q", none)
 	}
 }
 

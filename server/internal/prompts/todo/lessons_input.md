@@ -28,6 +28,9 @@ Agent の最後の返信：
 {{end}}{{if .Known}}
 このプロジェクトに記録済みの教訓：
 {{range .Known}}- [{{.ID}}] {{.Kind}}：{{.Text}}
+{{end}}{{end}}{{if .Deleted}}
+ユーザーが削除した教訓（二度と学ばない）：
+{{range .Deleted}}- [{{.ID}}] {{.Kind}}：{{.Text}}
 {{end}}{{end}}{{else if .Language}}Task: {{.Title}}
 {{with .Request}}
 The user's original request:
@@ -58,6 +61,9 @@ The Agent's last reply:
 {{end}}{{if .Known}}
 Lessons this project already has:
 {{range .Known}}- [{{.ID}}] {{.Kind}}: {{.Text}}
+{{end}}{{end}}{{if .Deleted}}
+Lessons the user deleted (never learn them again):
+{{range .Deleted}}- [{{.ID}}] {{.Kind}}: {{.Text}}
 {{end}}{{end}}{{else}}任务：{{.Title}}
 {{with .Request}}
 用户最初的要求：
@@ -88,4 +94,7 @@ Agent 最后的回复：
 {{end}}{{if .Known}}
 这个项目已经记下的经验：
 {{range .Known}}- [{{.ID}}] {{.Kind}}：{{.Text}}
+{{end}}{{end}}{{if .Deleted}}
+用户删掉的经验（不要再学）：
+{{range .Deleted}}- [{{.ID}}] {{.Kind}}：{{.Text}}
 {{end}}{{end}}{{end}}

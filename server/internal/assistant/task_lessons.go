@@ -26,7 +26,9 @@ import (
 // (projectsForTask). Every new Agent of the project gets the most repeated fresh ones after the project's own block
 // (renderProjectLessons). A smooth acceptance makes no model call. A lesson the project already has is taught again (its
 // count goes up) instead of being stored twice, one the owner deleted is never learned again, and one not taught again
-// for lessonFresh is no longer handed out. Nothing here changes the supervisor's instructions or task_review.
+// for lessonFresh is no longer handed out. Text alone cannot tell a deleted lesson said in other words, so the model is
+// shown the deleted ones to leave out, and what it ties to one is dropped. Nothing here changes the supervisor's
+// instructions or task_review.
 
 const (
 	lessonsReadTimeout  = time.Minute      // reading the Agent's last reply
@@ -35,6 +37,7 @@ const (
 	lessonsPerTask      = 3    // lessons one acceptance may teach
 	lessonTextMax       = 200  // runes of one lesson
 	lessonsKnownMost    = 12   // the project's lessons the model is shown, so it can say a new one repeats one
+	lessonsDeletedMost  = 12   // the newest deleted lessons the model is shown, so it leaves out one that repeats them
 	lessonsReviewsMost  = 8    // the latest reviews of the stretch of work read
 	lessonsCriteriaMost = 10   // criteria, scope changes and answers read, each
 	lessonsReplyMax     = 2000 // runes of the Agent's last reply
@@ -47,6 +50,21 @@ const (
 	lessonsShownRunes   = 1200
 	lessonFresh         = 90 * 24 * time.Hour // a lesson not taught again for this long is no longer handed out
 )
+
+// lessonsReply is what the model answers (todo/lessons).
+type lessonsReply struct {
+	Lessons []struct {
+		Kind   string `json:"kind"`
+		Text   string `json:"text"`
+		SameAs string `json:"same_as"`
+	} `json:"lessons"`
+}
+
+// foundLesson is one lesson the model answered, tidied: a known kind, one line within lessonTextMax, and the ID the
+// model gave of a project lesson it repeats ("" none), which may name a deleted one.
+type foundLesson struct {
+	Kind, Text, SameAs string
+}
 
 // taskLessons is assistant.task_lessons in effect: off unless the owner turned it on.
 func (s *Service) taskLessons(ctx context.Context) bool {
@@ -106,7 +124,7 @@ func (s *Service) learnTaskLessons(ctx context.Context, t Todo, doneAt time.Time
 	agents := s.outcomeAgents(rctx, t)
 	cancel()
 	language := answerLanguage(s.hello(ctx).Locale)
-	in := lessonsInput(language, t, briefRef, reviews, since, answers, agents, known.Live)
+	in := lessonsInput(language, t, briefRef, reviews, since, answers, agents, known)
 	mctx, mcancel := context.WithTimeout(ctx, lessonsModelTimeout)
 	defer mcancel()
 	var out lessonsReply
@@ -205,9 +223,10 @@ func (s *Service) lessonAnswers(ctx context.Context, id string, since time.Time)
 
 // lessonsInput is the task's story as the model reads it (todo/lessons_input): the brief's request, goal, criteria,
 // scope changes and result when it has one (else the to-do's notes and done-when), the reviews with the criteria not
-// met, the owner's answers, the time, the newest Agent's last reply, and the project's lessons.
+// met, the owner's answers, the time, the newest Agent's last reply, the project's lessons, and the newest deleted ones
+// with their tombstones' IDs, each text once. Only the model can tell a deleted lesson said in other words.
 func lessonsInput(language string, t Todo, brief *TaskBrief, reviews []TaskReview, since time.Time,
-	answers []prompts.TodoLessonsAnswer, agents []outcomeAgent, known []kb.ProjectMemoryRecord) prompts.TodoLessonsInput {
+	answers []prompts.TodoLessonsAnswer, agents []outcomeAgent, known kb.ProjectLessons) prompts.TodoLessonsInput {
 	in := prompts.TodoLessonsInput{Language: language, Title: clip(oneLine(t.Title), lessonFieldMax), Answers: answers}
 	criteria := t.Supervision.DoneWhen
 	if brief != nil {
@@ -251,25 +270,20 @@ func lessonsInput(language string, t Todo, brief *TaskBrief, reviews []TaskRevie
 	if len(agents) > 0 {
 		in.Reply = clipMiddle(agents[0].Text, lessonsReplyMax)
 	}
-	for _, k := range known[:min(len(known), lessonsKnownMost)] {
+	for _, k := range known.Live[:min(len(known.Live), lessonsKnownMost)] {
 		in.Known = append(in.Known, prompts.TodoLessonsKnown{ID: k.ID, Kind: k.Kind, Text: clip(oneLine(k.Conclusion), lessonTextMax)})
 	}
+	shown := map[string]bool{}
+	for _, r := range known.Retired {
+		if len(in.Deleted) == lessonsDeletedMost {
+			break
+		}
+		if key := kb.LessonKey(r.Conclusion); key != "" && !shown[key] {
+			shown[key] = true
+			in.Deleted = append(in.Deleted, prompts.TodoLessonsKnown{ID: r.ID, Kind: r.Kind, Text: clip(oneLine(r.Conclusion), lessonTextMax)})
+		}
+	}
 	return in
-}
-
-// lessonsReply is what the model answers (todo/lessons).
-type lessonsReply struct {
-	Lessons []struct {
-		Kind   string `json:"kind"`
-		Text   string `json:"text"`
-		SameAs string `json:"same_as"`
-	} `json:"lessons"`
-}
-
-// foundLesson is one lesson the model answered, tidied: a known kind, one line within lessonTextMax, and the ID of the
-// project's lesson it repeats ("" none).
-type foundLesson struct {
-	Kind, Text, SameAs string
 }
 
 // tidyLessons keeps what the model answered that can be a lesson: a known kind, text that is not empty, at most
@@ -321,16 +335,14 @@ func lessonsLearned(l kb.ProjectLessons, key string) bool {
 // planLessons is what one completion (key, of to-do todoID) writes to a project whose lessons are cur. A lesson found
 // either teaches a live one again (the one the model named, else one with the same text: a record that supersedes it
 // with its count up and the to-do among its sources) or is new. Nothing for a completion already learned from, for a
-// lesson the to-do taught already, or for one the owner deleted. The text of a lesson taught again is kept: the owner
-// may have corrected it.
+// lesson the to-do taught already, or for one the owner deleted (lessonsDeleted): one with the text of any version of
+// a deleted lesson, or one the model says repeats a deleted lesson. The text of a lesson taught again is kept: the
+// owner may have corrected it.
 func planLessons(cur kb.ProjectLessons, todoID, key string, now time.Time, found []foundLesson) []kb.ProjectMemoryRecord {
 	if lessonsLearned(cur, key) {
 		return nil
 	}
-	retired := map[string]bool{}
-	for _, r := range cur.Retired {
-		retired[kb.LessonKey(r.Conclusion)] = true
-	}
+	deletedIDs, deletedTexts := lessonsDeleted(cur)
 	live := slices.Clone(cur.Live)
 	byKey := map[string]int{}
 	for i := len(live) - 1; i >= 0; i-- { // the newest of two with the same text wins
@@ -340,7 +352,7 @@ func planLessons(cur kb.ProjectLessons, todoID, key string, now time.Time, found
 	var out []kb.ProjectMemoryRecord
 	for i, l := range found {
 		k := kb.LessonKey(l.Text)
-		if retired[k] {
+		if deletedTexts[k] || deletedIDs[l.SameAs] {
 			continue
 		}
 		target := -1
@@ -375,6 +387,22 @@ func planLessons(cur kb.ProjectLessons, todoID, key string, now time.Time, found
 		out = append(out, r)
 	}
 	return out
+}
+
+// lessonsDeleted are what the owner's deletions block: the IDs of each tombstone and of every version of the lesson it
+// retired, which the model may name in same_as, and those versions' texts (kb.LessonKey). A tombstone keeps only the
+// last text, and the words a task taught before the owner's correction stay deleted too.
+func lessonsDeleted(cur kb.ProjectLessons) (ids, texts map[string]bool) {
+	ids, texts = map[string]bool{}, map[string]bool{}
+	for _, r := range cur.Retired {
+		ids[r.ID], ids[r.SupersedesID], texts[kb.LessonKey(r.Conclusion)] = true, true, true
+	}
+	for _, r := range cur.RetiredVersions {
+		ids[r.ID], texts[kb.LessonKey(r.Conclusion)] = true, true
+	}
+	delete(ids, "")
+	delete(texts, "")
+	return ids, texts
 }
 
 // lessonLastSeen is when a lesson was last taught or corrected.

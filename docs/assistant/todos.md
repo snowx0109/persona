@@ -1044,14 +1044,15 @@ them.
   outcome; prompts `server/internal/prompts/todo/lessons.md`, `lessons_input.md`). It reads the title, the owner's
   request, goal and criteria from the brief, the scope changes, each review of the stretch (verdict, round, note, the
   criteria not met with what was found), the owner's answers, how each criterion ended, the estimate against the time
-  taken, the newest Agent's last reply (2,000 characters), and the project's 12 newest lessons. The supervisor's
+  taken, the newest Agent's last reply (2,000 characters), the project's 12 newest lessons, and, as a separate "deleted,
+  never learn again" list, its 12 newest deleted lessons with their tombstones' IDs (each text once). The supervisor's
   instructions and `task_review` are unchanged.
 - **What it answers**: at most 3 lessons, each `{kind, text, same_as}`. `kind` is `repeated_mistake`, `missing_context`,
   `wasted_step` or `improvement`, and `text` is one sentence of at most 200 characters in the owner's language that says
-  what to do next time. `same_as` names a lesson of the project the new one repeats. Nothing is invented, and an empty
-  list is the usual answer. A lesson of another kind, an empty one, or one that the shared-transcript scrub
-  (`transcript.SanitizeShareText`) would redact (a key, a token, a password, a secret in a link) is dropped. Without a
-  model nothing is learned.
+  what to do next time. `same_as` names a lesson of the project the new one repeats, and a lesson that repeats a deleted
+  one, even in other words, is left out. Nothing is invented, and an empty list is the usual answer. A lesson of another
+  kind, an empty one, or one that the shared-transcript scrub (`transcript.SanitizeShareText`) would redact (a key, a
+  token, a password, a secret in a link) is dropped. Without a model nothing is learned.
 - **Where**: typed `lesson` records in the project's `memory.jsonl` ([knowledge.md](knowledge.md)), under the ownership
   worker outcomes use (`projectsForTask`: the to-do's live project, then its direction's project, then the projects of
   its last Agent's directory). Without a project nothing is learned. A record keeps `kind`, the text in `conclusion`,
@@ -1063,10 +1064,13 @@ them.
   named, else one with the same letters and digits, `kb.LessonKey`) is taught again: a record that supersedes it, with
   `seen` up, the to-do added to its sources and its text kept (the owner may have corrected it). A to-do already among
   its sources does not count again, and a completion is learned from once (its record IDs start with a key of the to-do
-  and its completion time). A deleted lesson leaves a `lesson_retired` tombstone that keeps its text, and a lesson with
-  that text is never learned again. All writes go through `kb.Engine.UpdateProjectLessons`, which decides from the
-  lessons as they are under the store's lock, so a merge, an edit and a delete never supersede the same version twice. A
-  lessons read goes through at most the last 8 MiB of the file.
+  and its completion time). A deleted lesson leaves a `lesson_retired` tombstone that keeps its last text, and it is
+  never learned again (#12393): a lesson with the text of any of its versions is dropped (so its first words stay
+  deleted when the owner corrected it before deleting it), and so is one whose `same_as` names its tombstone or any of
+  its versions. Other words are for the model to recognize, as when merging: it is shown the deleted lessons and leaves
+  out one that repeats them. All writes go through `kb.Engine.UpdateProjectLessons`, which decides from the lessons as
+  they are under the store's lock, so a merge, an edit and a delete never supersede the same version twice. A lessons
+  read goes through at most the last 8 MiB of the file.
 - **Handed to new Agents**: every new Agent of the project gets, after the project's own block (`todo/project.md` or
   `todo/project_memory.md`, both unchanged), a block of its own (`server/internal/prompts/todo/project_lessons.md`). It
   holds the fresh lessons, the most repeated first and then the most recently taught. At most 2 of one kind, 5 in all and
@@ -1078,12 +1082,15 @@ them.
   (Delete asks first). Its routes are in `docs/protocol/protocol.md` "Project lessons", for the owner's apps only.
 - **Cost**: at most one model call per accepted task that had friction, none otherwise; no call at dispatch, which reads
   a bounded tail of the file.
-- **Checks**: `server/internal/kb/project_lessons_test.go` (chains, tombstones, stale writes, the read's bound, dispatch
-  memory unchanged); `server/internal/assistant/task_lessons_test.go` (an accepted rework learned end to end and handed
-  to the next Agent, off by default and byte-identical, no call for a smooth acceptance, nothing without a model,
-  merges and deletions, selection bounds, friction, the routes); goldens `todo_lessons.*`, `todo_lessons_input.*`,
-  `todo_project_lessons.*` in `server/internal/hub/testdata/prompts`; web `web/src/views/knowledge/ProjectLessons.test.tsx`
-  and `web/src/views/settings/AssistantSettings.task-lessons.test.tsx`.
+- **Checks**: `server/internal/kb/project_lessons_test.go` (chains, tombstones and every version of a deleted lesson,
+  stale writes, the read's bound, dispatch memory unchanged); `server/internal/assistant/task_lessons_test.go` (an
+  accepted rework learned end to end and handed to the next Agent, off by default and byte-identical, no call for a
+  smooth acceptance, nothing without a model, merges and deletions, the deleted list the model reads, selection bounds,
+  friction, the routes); `server/internal/assistant/task_lessons_deleted_test.go` (a deleted lesson taught again in
+  other words, named in `same_as`, or in its first words after the owner corrected it); goldens `todo_lessons.*`,
+  `todo_lessons_input.*`, `todo_project_lessons.*` in `server/internal/hub/testdata/prompts`; web
+  `web/src/views/knowledge/ProjectLessons.test.tsx` and
+  `web/src/views/settings/AssistantSettings.task-lessons.test.tsx`.
 - **Not yet**: the iOS, Android and HarmonyOS project pages and switches; ranking lessons by how well they match the new
   task's words; promoting a lesson into the direction's notes; showing lessons to the supervisor or leader as it plans;
   measuring rework rounds and owner corrections per accepted task before and after (the evaluation #8231 asks for).
