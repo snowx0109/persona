@@ -92,7 +92,7 @@ func TestPlanLessonsDropsOneNamingADeletedLesson(t *testing.T) {
 	for _, id := range []string{tomb.ID, edited, "lesson-a"} {
 		found := []foundLesson{{Kind: kb.LessonMissingContext, Text: text, SameAs: id}}
 		if got := planLessons(cur, "todo-new", key, now, found); got != nil {
-			t.Fatalf("same_as %s names a deleted lesson, yet the plan is %+v", id, got)
+			t.Errorf("same_as %s names a deleted lesson, yet the plan is %+v", id, got)
 		}
 	}
 	if got := planLessons(cur, "todo-new", key, now, []foundLesson{{Kind: kb.LessonMissingContext, Text: text}}); len(got) != 1 ||
